@@ -1,8 +1,8 @@
 # CoMLRL
 
-[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-CoMLRL-blue)](https://huggingface.co/OpenMLRL)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-white)](https://huggingface.co/OpenMLRL)
 [![GitHub](https://img.shields.io/github/stars/OpenMLRL/CoMLRL?style=social)](https://github.com/OpenMLRL/CoMLRL)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-white.svg)](https://opensource.org/licenses/MIT)
 
 Improve LLM Collaboration with Multi-LLM Reinforcement Learning.
 
