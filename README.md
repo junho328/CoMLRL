@@ -1,6 +1,6 @@
 # CoMLRL
 
-Cooperative Multi-LLM Reinforcement Learning.
+Improve LLM Collaboration with cooperative Multi-LLM Reinforcement Learning.
 
 ## Setup
 
@@ -14,24 +14,17 @@ pip install -e .
 
 ## Usage
 
-```bash
-python examples/story-len-ratio.py
-```
-
-## Usage
-
-See `examples/` for usage examples.
+See scripts in `examples/` for usage examples.
 
 ## Algorithms
 
-- MAGRPO: Multi-Agent Group-Relative Policy Optimization
+- **MAGRPO:** Multi-Agent Group-Relative Policy Optimization
+- More Algs coming soon!
 
 ## Contributors
 
-We would like to acknowledge the contributors that made this project possible ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+We would like to acknowledge the contributors that made this project possible.
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
 <table>
   <tr>
     <td align="center"><a href="https://github.com/LovelyBuggies"><img src="https://avatars.githubusercontent.com/u/29083689?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Shuo Liu</b></sub></a><br /><a href="#ideas" title="Ideas">🤔</a> <a href="https://github.com/OpenMLRL/CoMLRL/commits?author=LovelyBuggies" title="Code">💻</a> <a href="https://github.com/OpenMLRL/CoMLRL/" title="Docs">📖</a></td>
@@ -39,8 +32,4 @@ We would like to acknowledge the contributors that made this project possible ([
     <td align="center"><a href="https://github.com/zedyelllion"><img src="https://avatars.githubusercontent.com/u/111674669?v=4?s=80" width="80px;" alt=""/><br /><sub><b>Zeyu Liang</b></sub></a><br /> <a href="https://github.com/OpenMLRL/CoMLRL/" title="Docs"></a> <a href="https://github.com/OpenMLRL/CoMLRL/" title="Docs">📖</a> <a href="https://github.com/OpenMLRL/CoMLRL/issues?q=author%3ATenshi0x0" title="Bug Report">🐛</a></td>
  </tr>
 </table>
-
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
-
 <!-- ALL-CONTRIBUTORS-LIST:END -->
