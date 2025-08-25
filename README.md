@@ -1,6 +1,6 @@
 # CoMLRL
 
-Improve LLM Collaboration with cooperative Multi-LLM Reinforcement Learning.
+Improve LLM Collaboration with Multi-LLM Reinforcement Learning.
 
 ## Setup
 
