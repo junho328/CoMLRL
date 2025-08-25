@@ -23,7 +23,7 @@ See scripts in `examples/` for usage examples.
 
 ## Contributors
 
-We would like to acknowledge the contributors that made this project possible.
+We would like to thank all contributors for this project.
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <table>
   <tr>
