@@ -14,7 +14,7 @@ Improve LLM Collaboration with Multi-LLM Reinforcement Learning.
 
 ```bash
 cd CoMLRL
-conda create -n comlrl python=3.10 -y
+conda create -n comlrl python=3.10
 conda activate comlrl
 pip install -r requirements.txt
 pip install -e .
@@ -31,7 +31,7 @@ See scripts in `examples/` for usage examples.
 
 ## Contributors
 
-We would like to thank all contributors for this project.
+We would like to thank all contributors to this project.
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <table>
   <tr>
