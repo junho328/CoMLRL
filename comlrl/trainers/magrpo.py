@@ -24,7 +24,9 @@ class MAGRPOConfig(TrainingArguments):
     # Core MAGRPO parameters
     num_agents: int = field(
         default=2,
-        metadata={"help": "Number of agents for multi-agent training."},
+        metadata={
+            "help": "Number of agents; set to 1 for single-agent GRPO."
+        },
     )
     num_generations: int = field(
         default=4,
@@ -190,11 +192,12 @@ class MAGRPOTrainer:
                     agent_copy.load_state_dict(copy.deepcopy(model.state_dict()))
                     self.agents.append(agent_copy)
 
-        if self.num_agents < 2:
-            raise ValueError("MAGRPO requires at least 2 agents for training.")
+        # Allow single-agent as a special case (GRPO)
+        if self.num_agents < 1:
+            raise ValueError("num_agents must be >= 1")
         if self.args.num_generations < 2:
             raise ValueError(
-                "MAGRPO requires num_generations to be at least 2 for multi-agent training."
+                "num_generations must be >= 2 (group baseline requires multiple samples)."
             )
         if self.args.per_device_train_batch_size != 1:
             raise ValueError(
