@@ -24,9 +24,7 @@ class MAGRPOConfig(TrainingArguments):
     # Core MAGRPO parameters
     num_agents: int = field(
         default=2,
-        metadata={
-            "help": "Number of agents; set to 1 for single-agent GRPO."
-        },
+        metadata={"help": "Number of agents; set to 1 for single-agent GRPO."},
     )
     num_generations: int = field(
         default=4,
