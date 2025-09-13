@@ -156,9 +156,7 @@ class MAGRPOTrainer:
             self.model_config = model_config if model_config else {}
         else:
             self.model_config = model_config if model_config else {}
-
             self.num_agents = num_agents
-
             if isinstance(model, str):
                 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -178,17 +176,9 @@ class MAGRPOTrainer:
                     if special_tokens:
                         self.tokenizer.add_special_tokens(special_tokens)
             else:
-                # Create deep copies of the model for each agent
-                import copy
-
-                self.agents = []
-                if not model:
-                    raise ValueError("Model cannot be None if agents are not provided")
-                self.model_name = model.__class__.__name__
-                for _ in range(num_agents):
-                    agent_copy = type(model)(model.config)
-                    agent_copy.load_state_dict(copy.deepcopy(model.state_dict()))
-                    self.agents.append(agent_copy)
+                raise ValueError(
+                    "Model should be a string to create homogeneous agents"
+                )
 
         # Allow single-agent as a special case (GRPO)
         if self.num_agents < 1:
@@ -198,10 +188,7 @@ class MAGRPOTrainer:
                 "num_generations must be >= 2 (group baseline requires multiple samples)."
             )
         if self.args.per_device_train_batch_size != 1:
-            raise ValueError(
-                "MAGRPO requires per_device_train_batch_size to be 1. "
-                "Current implementation only supports batch_size=1."
-            )
+            raise ValueError("MAGRPO requires per_device_train_batch_size to be 1. ")
 
         # Check for external_transition requirement in multi-turn training
         if self.args.num_turns > 1 and external_transition is None:
@@ -234,41 +221,23 @@ class MAGRPOTrainer:
 
     def _setup_formatters(self, formatters, num_agents):
         """Set up format functions for each agent that can handle external transitions."""
-        # Use multi-turn compatible default formatter that accepts external parameters
-        default_format_func = (
-            lambda x, external_prompts=None, expert_feedback=None: x.get("prompt", "")
-        )
+        # Use multi-turn compatible default formatter that accepts external prompts
+        default_format_func = lambda x, external_prompts=None: x.get("prompt", "")
 
         if formatters is None:
             self.formatters = [default_format_func] * num_agents
         elif callable(formatters) and not isinstance(formatters, list):
-            # Wrap the formatter to accept external_info parameter
+            # Wrap the formatter to accept external_prompts parameter
             original_formatter = formatters
-            # Support both parameter names for backward compatibility
             sig = inspect.signature(original_formatter)
             if "external_prompts" in sig.parameters:
-                wrapped_formatter = (
-                    lambda x, external_prompts=None, expert_feedback=None: (
-                        original_formatter(
-                            x, external_prompts=external_prompts or expert_feedback
-                        )
-                        if (external_prompts is not None or expert_feedback is not None)
-                        else original_formatter(x)
-                    )
-                )
-            elif "expert_feedback" in sig.parameters:
-                # Keep compatibility with baselines that use expert_feedback
-                wrapped_formatter = (
-                    lambda x, external_prompts=None, expert_feedback=None: (
-                        original_formatter(
-                            x, expert_feedback=external_prompts or expert_feedback
-                        )
-                        if (external_prompts is not None or expert_feedback is not None)
-                        else original_formatter(x)
-                    )
+                wrapped_formatter = lambda x, external_prompts=None: (
+                    original_formatter(x, external_prompts=external_prompts)
+                    if external_prompts is not None
+                    else original_formatter(x)
                 )
             else:
-                wrapped_formatter = lambda x, external_prompts=None, expert_feedback=None: original_formatter(
+                wrapped_formatter = lambda x, external_prompts=None: original_formatter(
                     x
                 )
             self.formatters = [wrapped_formatter] * num_agents
@@ -278,37 +247,22 @@ class MAGRPOTrainer:
                     f"Number of formatters ({len(formatters)}) must match "
                     f"number of agents ({num_agents})"
                 )
-            # Ensure all formatters can accept external_info
+            # Ensure all formatters can accept external_prompts
             wrapped_formatters = []
             for formatter in formatters:
                 sig = inspect.signature(formatter)
                 if "external_prompts" in sig.parameters:
-                    # Modern formatter with external_prompts
-                    def make_wrapper(f):
-                        def wrapped(x, external_prompts=None, expert_feedback=None):
-                            return f(
-                                x, external_prompts=external_prompts or expert_feedback
-                            )
 
-                        return wrapped
-
-                    wrapped_formatters.append(make_wrapper(formatter))
-                elif "expert_feedback" in sig.parameters:
-                    # Keep compatibility with baselines that use expert_feedback
                     def make_wrapper(f):
-                        def wrapped(x, external_prompts=None, expert_feedback=None):
-                            return f(
-                                x, expert_feedback=external_prompts or expert_feedback
-                            )
+                        def wrapped(x, external_prompts=None):
+                            return f(x, external_prompts=external_prompts)
 
                         return wrapped
 
                     wrapped_formatters.append(make_wrapper(formatter))
                 else:
-                    # Wrap to accept but ignore both parameters
-                    wrapped = lambda x, external_prompts=None, expert_feedback=None, f=formatter: f(
-                        x
-                    )
+                    # Wrap to accept but ignore parameter
+                    wrapped = lambda x, external_prompts=None, f=formatter: f(x)
                     wrapped_formatters.append(wrapped)
             self.formatters = wrapped_formatters
         else:
@@ -363,7 +317,7 @@ class MAGRPOTrainer:
             if self.wandb_config is None:
                 self.wandb_config = {}
 
-            wandb_project = self.wandb_config.get("project", "trl")
+            wandb_project = self.wandb_config.get("project", "mlrl")
             wandb_entity = self.wandb_config.get("entity", "nu-llpr")
 
             # Use different default names based on num_turns
@@ -505,7 +459,6 @@ class MAGRPOTrainer:
 
         # Store best completions from previous turn for external transitions
         previous_best_completions = [None] * self.num_agents
-        previous_best_reward = 0.0
 
         # Run episode with configured number of turns
         for turn_idx in range(self.args.num_turns):
@@ -513,15 +466,11 @@ class MAGRPOTrainer:
             agent_external_prompts = [None] * self.num_agents
 
             if turn_idx > 0 and all(c is not None for c in previous_best_completions):
-                # For single-turn (num_turns=1), this block will never execute
                 # Get external transitions based on previous turn's best result
                 if self.external_transition is not None:
                     transition_result = self.external_transition(
                         prompt=batch_item.get("prompt", ""),
-                        best_reward=previous_best_reward,
                         agent_completions=previous_best_completions,
-                        batch_item=batch_item,
-                        turn_idx=turn_idx,
                         num_agents=self.num_agents,
                     )
 
@@ -543,7 +492,7 @@ class MAGRPOTrainer:
                     self.agents[agent_idx],
                     [batch_item],
                     agent_idx=agent_idx,
-                    num_return_sequences=1,  # Only one for evaluation
+                    num_return_sequences=1,
                     max_new_tokens=self.args.max_new_tokens,
                     external_prompts=agent_external_prompts[agent_idx],
                 )
@@ -566,7 +515,6 @@ class MAGRPOTrainer:
                 )
 
                 if rewards:
-                    previous_best_reward = rewards[0]
                     for agent_idx in range(self.num_agents):
                         previous_best_completions[agent_idx] = agent_sample_completions[
                             agent_idx
@@ -648,7 +596,7 @@ class MAGRPOTrainer:
                         else:
                             args.append(all_agent_completions_turns[i])
                     else:
-                        args.append([])  # Empty list if we have fewer agents
+                        args.append([])
 
                 # Check if this is a code logger or text logger
                 if "test_cases" in params or "all_test_cases" in params:
@@ -712,16 +660,12 @@ class MAGRPOTrainer:
                         wandb.log(eval_metrics)
 
                 # Process single batch item (batch_size=1 enforced)
-                batch_item = batch[
-                    0
-                ]  # Since batch_size=1, take the first (and only) item
+                batch_item = batch[0]
                 # Unified training step
                 batch_loss, rewards, turn_data, early_termination = self._train_step(
                     batch_item,
                     epoch_rewards,
                     epoch_turn_rewards,
-                    epoch_agent_rewards,
-                    epoch_reward_components,
                     **kwargs,
                 )
                 if early_termination:
@@ -746,8 +690,6 @@ class MAGRPOTrainer:
         batch_item,
         epoch_rewards,
         epoch_turn_rewards,
-        epoch_agent_rewards,
-        epoch_reward_components,
         **kwargs,
     ):
         """Execute a unified training step that handles any number of turns."""
@@ -757,25 +699,18 @@ class MAGRPOTrainer:
 
         # Store best completions from previous turn for external transitions
         previous_best_completions = [None] * self.num_agents
-        previous_best_reward = 0.0
 
         # Execute multi-turn episode
         for turn_idx in range(self.args.num_turns):
-            # Zero gradients for each agent at the start of each turn
             for optimizer in self.optimizers:
                 optimizer.zero_grad()
 
             # Prepare external prompts for turns after the first
             agent_external_prompts = [None] * self.num_agents
-
             if turn_idx > 0 and all(c is not None for c in previous_best_completions):
-                # Get external transitions based on previous turn's best result
                 transition_result = self.external_transition(
                     prompt=batch_item.get("prompt", ""),
-                    best_reward=previous_best_reward,
                     agent_completions=previous_best_completions,
-                    batch_item=batch_item,
-                    turn_idx=turn_idx,
                     num_agents=self.num_agents,
                 )
 
@@ -793,7 +728,6 @@ class MAGRPOTrainer:
 
             # Generate completions from each agent
             all_completions = []
-
             for agent_idx in range(self.num_agents):
                 agent_completions = self._generate_completions_with_external_prompts(
                     self.agents[agent_idx],
@@ -830,7 +764,6 @@ class MAGRPOTrainer:
                     previous_best_completions[agent_idx] = agent_completions_list[
                         agent_idx
                     ][best_idx]
-                previous_best_reward = rewards[best_idx]
 
             # Calculate turn mean reward
             turn_mean_reward = np.mean(rewards) if rewards else 0
@@ -1115,15 +1048,8 @@ class MAGRPOTrainer:
 
             # Add any additional user-provided kwargs (these override model defaults)
             generation_kwargs.update(kwargs)
-
             generation_output = agent.generate(**generation_kwargs)
         except Exception as e:
-            # Restore model state before raising exception
-            agent.train(training_mode)
-            # Restore original requires_grad states
-            for name, param in agent.named_parameters():
-                if name in original_requires_grad:
-                    param.requires_grad = original_requires_grad[name]
             raise ValueError(f"Generation failed: {str(e)}")
 
         # Restore original model state and gradients
@@ -1141,7 +1067,6 @@ class MAGRPOTrainer:
         # Find where padding token starts if any
         pad_positions = (prompt_input_ids[0] == self.tokenizer.pad_token_id).nonzero()
         if pad_positions.shape[0] > 0:
-            # Use the position of the first padding token
             prompt_len = pad_positions[0].item()
 
         # Extract completion text for single prompt
@@ -1225,7 +1150,6 @@ class MAGRPOTrainer:
             )
 
         # Multi-turn with external prompts
-
         format_func = self.formatters[agent_idx]
 
         # Apply formatter with external prompts if provided
@@ -1233,7 +1157,6 @@ class MAGRPOTrainer:
             format_func(
                 item,
                 external_prompts=external_prompts,
-                expert_feedback=external_prompts,
             )
             for item in batch_items
         ]
