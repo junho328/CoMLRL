@@ -29,6 +29,17 @@ See scripts in `examples/` for usage examples.
 - **MAGRPO:** Multi-Agent Group-Relative Policy Optimization
 - More algs are coming soon!
 
+## Environments
+
+- [LLM Collaboration for Code Generation](https://github.com/OpenMLRL/LLM_Collaboration_Code_Generation)
+  - MBPP
+  - HumanEval
+  - CoopHumanEval
+- [LLM Collaboration for Module Completion](https://github.com/OpenMLRL/LLM_Collaboration_Module_Completion)
+  - ClassEval
+- [LLM Collaboration for Software Engineering](https://github.com/OpenMLRL/LLM_Collaboration_Software_Engineering)
+
+
 ## Contributors
 
 We would like to thank all contributors to this project.
