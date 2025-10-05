@@ -20,11 +20,13 @@ class MAGRPOConfig(TrainingArguments):
     Supports both single-turn and multi-turn training modes.
     """
 
-    # Core MAGRPO parameters
+    # Core setup
     num_agents: int = field(
         default=2,
         metadata={"help": "Number of agents; set to 1 for single-agent GRPO."},
     )
+
+    # Sampling/generation
     num_generations: int = field(
         default=4,
         metadata={"help": "Number of generations to sample per prompt for each agent."},
@@ -33,63 +35,46 @@ class MAGRPOConfig(TrainingArguments):
         default=256,
         metadata={"help": "Maximum number of new tokens to generate after the prompt."},
     )
-
-    # Generation parameters (Note: these are set but not currently used by the trainer)
     temperature: float = field(
         default=0.7,
         metadata={
-            "help": "Temperature for sampling (currently set but not used - uses model_config instead)."
+            "help": "Temperature for sampling (present for completeness; generation uses model_config if provided)."
         },
     )
     top_p: float = field(
         default=0.9,
         metadata={
-            "help": "Top-p for sampling (currently set but not used - uses model_config instead)."
+            "help": "Top-p for sampling (present for completeness; generation uses model_config if provided)."
         },
     )
 
-    # Multi-turn specific parameters (optional, for MT-MAGRPO)
+    # Multi-turn / tree rollout
     num_turns: Optional[int] = field(
         default=1,
         metadata={
-            "help": "Number of turns per episode. Default is 1 for single-turn training. "
-            "Set > 1 to enable multi-turn training with external transitions between turns."
+            "help": "Number of turns per episode (set >1 for multi-turn with external transitions)."
         },
     )
-    # Uniform updates across turns (no per-turn gradient weighting or early termination)
     discount: float = field(
         default=0.9,
-        metadata={
-            "help": "Discount factor (gamma) for computing returns across turns."
-        },
+        metadata={"help": "Discount factor (gamma) over turns for returns."},
     )
-    # Handoff removed: branching uses all generations
-    # Joint action composition mode for multiple agents
     joint_mode: str = field(
         default="aligned",
         metadata={
-            "help": "How to form joint actions from per-agent generations: 'cross' (Cartesian product) or 'aligned' (index-aligned)."
+            "help": "Joint action composition: 'cross' (Cartesian product) or 'aligned' (index-aligned)."
         },
     )
-    # Early termination threshold on mean immediate reward at a node
     termination_threshold: Optional[float] = field(
         default=None,
         metadata={
-            "help": "If set, a branch terminates at a turn when the mean immediate reward across sibling joint actions exceeds this threshold."
-        },
-    )
-
-    # GRPO-style advantage configuration
-    normalize_advantage: bool = field(
-        default=False,
-        metadata={
-            "help": "If True, compute group-relative advantages using returns normalized by group std (z-score).",
+            "help": "Early stop a branch if mean reward at a node exceeds this threshold."
         },
     )
     epsilon_clip: Optional[float] = field(
         default=None,
         metadata={
-            "help": "Clamp normalized advantages to [-epsilon_clip, +epsilon_clip] for stability.",
+            "help": "Optional clamp for advantages if used by downstream code.",
         },
     )
 
@@ -123,23 +108,28 @@ class MAGRPOTrainer:
 
     def __init__(
         self,
+        # Model/tokenizer setup
         model: Optional[Union[str, PreTrainedModel]] = None,
         agents: Optional[List[PreTrainedModel]] = None,
         num_agents: int = 2,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_config: Optional[Dict[str, Any]] = None,
+        # Data
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        dataset_type: Optional[str] = None,
+        # Reward/formatting
         reward_func: Optional[Callable] = None,
         reward_processor: Optional[Callable[[float], float]] = None,
         formatters: Optional[Union[Callable, List[Callable]]] = None,
-        args: Optional[MAGRPOConfig] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        # External transitions (multi-turn)
         external_transition: Optional[Callable] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        # Logging/eval
         wandb_config: Optional[Dict[str, Any]] = None,
-        model_config: Optional[Dict[str, Any]] = None,
         eval_logger: Optional[Callable] = None,
         eval_aggregator: Optional[Callable] = None,
-        dataset_type: Optional[str] = None,
-        enable_code_level_metrics: Optional[bool] = None,
+        # Training args
+        args: Optional[MAGRPOConfig] = None,
     ):
         # Check for GPU availability
         if not torch.cuda.is_available():
@@ -152,11 +142,11 @@ class MAGRPOTrainer:
         if model is not None and agents is not None:
             raise ValueError("Cannot provide both model and agents parameters")
 
+        # Training arguments
         self.args = args if args is not None else MAGRPOConfig()
 
-        # Setup formatters (unified for both single-turn and multi-turn)
+        # Reward and formatting
         self._setup_formatters(formatters, num_agents)
-
         self._setup_reward_function(reward_func, reward_processor)
 
         if agents is not None:
@@ -253,37 +243,6 @@ class MAGRPOTrainer:
                             self.dataset_type = ds.get("type")
             except Exception:
                 self.dataset_type = None
-
-        # Toggle for training-time code-level metrics (default False)
-        self.enable_code_level_metrics = (
-            bool(enable_code_level_metrics)
-            if enable_code_level_metrics is not None
-            else False
-        )
-        if enable_code_level_metrics is None:
-            # Try to infer from config sections
-            try:
-                if isinstance(self.wandb_config, dict):
-                    sections = self.wandb_config.get("config_sections", {})
-                    if isinstance(sections, dict):
-                        trainer_section = sections.get("trainer", {})
-                        if isinstance(trainer_section, dict):
-                            if "log_code_levels" in trainer_section:
-                                self.enable_code_level_metrics = bool(
-                                    trainer_section.get("log_code_levels")
-                                )
-                            elif isinstance(trainer_section.get("logging"), dict):
-                                log_cfg = trainer_section.get("logging")
-                                if "code_level_metrics" in log_cfg:
-                                    self.enable_code_level_metrics = bool(
-                                        log_cfg.get("code_level_metrics")
-                                    )
-                                elif "log_code_levels" in log_cfg:
-                                    self.enable_code_level_metrics = bool(
-                                        log_cfg.get("log_code_levels")
-                                    )
-            except Exception:
-                pass
 
         # Verbosity from config (default True)
         self.verbose = True
@@ -443,19 +402,6 @@ class MAGRPOTrainer:
                 )
                 if ext_mode:
                     config_dict["external_mode"] = ext_mode
-                    if ext_mode in ("level_feedback", "level_passed", "passed"):
-                        if "sandbox_slice" in external_section:
-                            config_dict["sandbox_slice"] = external_section.get(
-                                "sandbox_slice"
-                            )
-                    if (
-                        ext_mode == "expert_edits"
-                        and "expert_model" in external_section
-                    ):
-                        config_dict["expert_model"] = external_section.get(
-                            "expert_model"
-                        )
-                    # Only include composition flags if provided
                     if "original_prompt" in external_section:
                         config_dict["original_prompt"] = external_section.get(
                             "original_prompt"
@@ -464,8 +410,6 @@ class MAGRPOTrainer:
                         config_dict["previous_response"] = external_section.get(
                             "previous_response"
                         )
-
-                # Handoff removed
 
             init_kwargs = {
                 "project": wandb_project,
@@ -619,17 +563,17 @@ class MAGRPOTrainer:
         all_entry_points.append(batch_item.get("entry_point", ""))
         all_prompts.append(batch_item.get("prompt", ""))
 
-        # Store best completions from previous turn for external transitions
-        previous_best_completions = [None] * self.num_agents
+        # Track the selected completions from the previous turn (evaluation traces a single path)
+        previous_turn_completions = [None] * self.num_agents
 
         # Run episode with configured number of turns
         for turn_idx in range(self.args.num_turns):
             # Prepare external prompts for turns after the first
             agent_external_prompts = [None] * self.num_agents
 
-            if turn_idx > 0 and all(c is not None for c in previous_best_completions):
-                # Use previous best completions to form next-turn prompts during evaluation
-                selected_prev = list(previous_best_completions)
+            if turn_idx > 0 and all(c is not None for c in previous_turn_completions):
+                # Use previously selected completions to form next-turn prompts (single eval path)
+                selected_prev = list(previous_turn_completions)
                 # Get external transitions based on selected prior completions
                 if self.external_transition is not None:
                     transition_result = self.external_transition(
@@ -675,9 +619,9 @@ class MAGRPOTrainer:
             if rewards:
                 # Track per-turn reward across samples
                 eval_turn_rewards[turn_idx].append(float(rewards[0]))
-                # Update previous best completions for next-turn prompts
+                # Update selected previous-turn completions for next-turn prompts
                 for agent_idx in range(self.num_agents):
-                    previous_best_completions[agent_idx] = agent_sample_completions[
+                    previous_turn_completions[agent_idx] = agent_sample_completions[
                         agent_idx
                     ][-1]
 
@@ -781,7 +725,7 @@ class MAGRPOTrainer:
                     **kwargs,
                 )
 
-                # Log per-batch, per-turn metrics
+                # Log per-batch metrics once (aggregate across turns)
                 if self.wandb_initialized and isinstance(batch_stats, dict):
                     batch_log: Dict[str, Any] = {}
                     n_turns = max(1, int(self.args.num_turns))
@@ -797,16 +741,6 @@ class MAGRPOTrainer:
                                 "batch_expected_return"
                             ]
                         # No per-function reward splitting in single reward mode
-                        # Code-level metrics
-                        levels = stats.get("levels") or {}
-                        for k in [
-                            "level_1_reward",
-                            "level_2_reward",
-                            "level_3_reward",
-                            "bonus_reward",
-                        ]:
-                            if k in levels:
-                                batch_log[prefix + k] = float(levels[k])
 
                     if batch_log:
                         wandb.log(batch_log)
@@ -853,13 +787,6 @@ class MAGRPOTrainer:
         turn_return_node_means: List[List[float]] = [[] for _ in range(num_turns)]
         # No per-function accumulation in single reward mode
         turn_node_counts: List[int] = [0 for _ in range(num_turns)]
-
-        is_code = (self.dataset_type or "").lower() in ["humaneval", "coophumaneval"]
-        turn_level_sums = [
-            {"level_1": 0.0, "level_2": 0.0, "level_3": 0.0, "bonus": 0.0}
-            for _ in range(num_turns)
-        ]
-        turn_level_counts = [0 for _ in range(num_turns)]
 
         def build_node(turn_idx: int, prompts_per_agent=None):
             comps_per_agent = []
@@ -947,65 +874,6 @@ class MAGRPOTrainer:
                     terminate_here = float(np.mean(rewards_vec)) > float(term_threshold)
                 except Exception:
                     terminate_here = False
-
-            # Optional: compute code level metrics for logging (expensive)
-            if (
-                is_code
-                and self.enable_code_level_metrics
-                and callable(self.eval_logger)
-            ):
-                try:
-                    # Map to aux/main style: first agent as aux, last as main; single-agent -> empty aux
-                    if self.num_agents >= 2:
-                        c1_list = comps_per_agent[0]["completions"][0]
-                        c2_list = comps_per_agent[-1]["completions"][0]
-                    else:
-                        c2_list = comps_per_agent[0]["completions"][0]
-                        c1_list = [""] * len(c2_list)
-
-                    test_code = batch_item.get("test", "")
-                    entry_point = batch_item.get("entry_point", "")
-                    prompt_src = batch_item.get("prompt", "")
-
-                    # Build modern interface payload: each candidate as a one-turn sample
-                    aux_samples = [[c] for c in c1_list]
-                    main_samples = [[c] for c in c2_list]
-                    agent_cturns = [aux_samples, main_samples]
-
-                    metrics_list = self.eval_logger(
-                        agent_completions_turns=agent_cturns,
-                        test_cases=[test_code] * len(c2_list),
-                        entry_points=[entry_point] * len(c2_list),
-                        prompts=[prompt_src] * len(c2_list),
-                    )
-
-                    if metrics_list:
-                        # Support both single-turn and mt logger outputs
-                        # Prefer 'turn_1/*' keys if present
-                        l1_vals = []
-                        l2_vals = []
-                        l3_vals = []
-                        bonus_vals = []
-                        for m in metrics_list:
-                            if any(k.startswith("turn_1/") for k in m.keys()):
-                                l1_vals.append(m.get("turn_1/level_1_reward", 0.0))
-                                l2_vals.append(m.get("turn_1/level_2_reward", 0.0))
-                                l3_vals.append(m.get("turn_1/level_3_reward", 0.0))
-                                bonus_vals.append(m.get("turn_1/bonus_reward", 0.0))
-                            else:
-                                l1_vals.append(m.get("level_1_reward", 0.0))
-                                l2_vals.append(m.get("level_2_reward", 0.0))
-                                l3_vals.append(m.get("level_3_reward", 0.0))
-                                bonus_vals.append(m.get("bonus_reward", 0.0))
-
-                        turn_level_sums[turn_idx]["level_1"] += float(np.mean(l1_vals))
-                        turn_level_sums[turn_idx]["level_2"] += float(np.mean(l2_vals))
-                        turn_level_sums[turn_idx]["level_3"] += float(np.mean(l3_vals))
-                        turn_level_sums[turn_idx]["bonus"] += float(np.mean(bonus_vals))
-                        turn_level_counts[turn_idx] += 1
-                except Exception:
-                    # Skip level metrics if logger unavailable or call failed
-                    pass
 
             node = {
                 "turn": turn_idx,
@@ -1128,23 +996,9 @@ class MAGRPOTrainer:
                     np.mean(turn_return_node_means[t])
                 )
             # No per-reward-function means; use a single reward function
-            # Code level metrics
-            if is_code and turn_level_counts[t] > 0:
-                stats["levels"] = {
-                    "level_1_reward": turn_level_sums[t]["level_1"]
-                    / float(turn_level_counts[t]),
-                    "level_2_reward": turn_level_sums[t]["level_2"]
-                    / float(turn_level_counts[t]),
-                    "level_3_reward": turn_level_sums[t]["level_3"]
-                    / float(turn_level_counts[t]),
-                    "bonus_reward": turn_level_sums[t]["bonus"]
-                    / float(turn_level_counts[t]),
-                }
             batch_stats[t] = stats
 
         return batch_loss, batch_stats
-
-    # _log_epoch_summary removed; logging handled inline in train()
 
     def _generate_completions(
         self,
@@ -1449,24 +1303,9 @@ class MAGRPOTrainer:
         # Convert returns to tensor
         returns_tensor = torch.tensor(returns, dtype=torch.float, device=device)
 
-        # Group-relative advantage based on returns
-        # Optionally normalize by group std and epsilon-clip
-        if getattr(self.args, "normalize_advantage", False):
-            mean_ret = returns_tensor.mean()
-            std_ret = returns_tensor.std(unbiased=False)
-            advantages = (returns_tensor - mean_ret) / (std_ret + 1e-8)
-            eps = getattr(self.args, "epsilon_clip", None)
-            if eps is not None:
-                try:
-                    eps_f = float(eps)
-                except (TypeError, ValueError):
-                    eps_f = None
-                if eps_f is not None and eps_f > 0:
-                    advantages = torch.clamp(advantages, min=-eps_f, max=eps_f)
-        else:
-            # Mean baseline without normalization
-            mean_ret = returns_tensor.mean()
-            advantages = returns_tensor - mean_ret
+        # Group-relative advantage based on returns (mean baseline, no z-score normalization)
+        mean_ret = returns_tensor.mean()
+        advantages = returns_tensor - mean_ret
 
         # Set agent to train mode to ensure gradients are tracked
         agent.train()
