@@ -26,28 +26,28 @@ See scripts in `examples/` for usage examples.
 
 ## Algorithms
 
-- **MAREINFORCE:** Multi-Agent REINFORCE without a baseline:
+- **MAREINFORCE:** Multi-Agent REINFORCE without a baseline.
 
 $$
   J(\theta_i) = \mathbb{E}_{\mathbf{o}_0 \sim \mathcal{D}, \mathbf{h}^\mathcal{G} \sim \mathbf{\pi}_{\mathbf{\theta}}}
   \Bigg[\frac{1}{|\mathcal{G}|}\sum_{g \in \mathcal{G}} R^{(g)}_t \cdot \log \pi_{\theta_i}(a^{(g)}_{i,t}|h_{i,t})\Bigg];
 $$
 
-- **MAGRPO:** Multi-Agent Group-Relative Policy Optimization, credits to [GRPO](https://arxiv.org/pdf/2402.03300),[Dr. GRPO](https://arxiv.org/abs/2503.20783), and [TreeRPO](https://arxiv.org/abs/2506.05183):
+- **MAGRPO:** Multi-Agent Group-Relative Policy Optimization, credits to [GRPO](https://arxiv.org/pdf/2402.03300),[Dr. GRPO](https://arxiv.org/abs/2503.20783), and [TreeRPO](https://arxiv.org/abs/2506.05183).
 
 $$
   J(\theta_i) = \mathbb{E}_{\mathbf{o}_0 \sim \mathcal{D}, \mathbf{h}^\mathcal{G} \sim \mathbf{\pi}_{\mathbf{\theta}}}
   \Bigg[\frac{1}{|\mathcal{G}|}\sum_{g \in \mathcal{G}} \Big(R^{(g)}_t - \text{mean}(R^{\mathcal{G}}_t)\Big)\cdot \log \pi_{\theta_i}(a^{(g)}_{i,t}|h_{i,t})\Bigg];
 $$
 
-- **MARLOO:** Multi-Agent REINFORCE Leave-One-Out, credits to [RLOO](https://openreview.net/forum?id=r1lgTGL5DE) and [Revisiting REINFORCE](https://arxiv.org/abs/2402.14740):
+- **MARLOO:** Multi-Agent REINFORCE Leave-One-Out, credits to [RLOO](https://openreview.net/forum?id=r1lgTGL5DE) and [Revisiting REINFORCE](https://arxiv.org/abs/2402.14740).
 
 $$
   J(\theta_i) = \mathbb{E}_{\mathbf{o}_0 \sim \mathcal{D}, \mathbf{h}^\mathcal{G} \sim \mathbf{\pi}_{\mathbf{\theta}}}
   \Bigg[\frac{1}{|\mathcal{G}|}\sum_{g \in \mathcal{G}} \Big(R^{(g)}_t - \sum_{k\in \mathcal{G}, k\neq g}\frac{R^{(k)}_t}{|\mathcal{G}|-1}\Big)\cdot \log \pi_{\theta_i}(a^{(g)}_{i,t}|h_{i,t})\Bigg];
 $$
 
-- **MAReMax:** Multi-Agent REINFORCE with Group Max, credits to [ReMax](https://arxiv.org/abs/2310.10505):
+- **MAReMax:** Multi-Agent REINFORCE with Group Max, credits to [ReMax](https://arxiv.org/abs/2310.10505).
 
 $$
   J(\theta_i) = \mathbb{E}_{\mathbf{o}_0 \sim \mathcal{D}, \mathbf{h}^\mathcal{G} \sim \mathbf{\pi}_{\mathbf{\theta}}}
@@ -60,14 +60,15 @@ $$
 
 This library supports LLM collaboration in various environments:
 
-- [Code Generation](https://github.com/OpenMLRL/LLM_Collab_Code_Generation)
-  - MBPP
-  - HumanEval
-  - CoopHumanEval
-- [Code Completion](https://github.com/OpenMLRL/LLM_Collab_Code_Completion)
-  - ClassEval
-- [Bug Fix](https://github.com/OpenMLRL/LLM_Collab_Software_Engineering)
-
+- Writing Collaboration
+  - [TLDR](https://huggingface.co/datasets/trl-lib/tldr) - Summarizing Reddit posts.
+  - [ArXiv](http://arxiv.org/abs/1905.00075) - Expanding abstracts into introductions.
+- [Code Generation](https://github.com/OpenMLRL/LLM_Collab_Code_Generation): Generate code solutions for programming problems.
+  - [MBPP](https://arxiv.org/abs/2108.07732) - Mostly basic python problems.
+  - [HumanEval](https://arxiv.org/abs/2107.03374) - Handwritten evaluation problems
+  - [CoopHumanEval](https://huggingface.co/datasets/OpenMLRL/CoopHumanEval) - HumanEval with cooperative nature.
+- [Code Completion](https://github.com/OpenMLRL/LLM_Collab_Code_Completion): Complete code snippets based on given contexts.
+  - [ClassEval](https://conf.researchr.org/details/icse-2024/icse-2024-research-track/219/Evaluating-Large-Language-Models-in-Class-Level-Code-Generation) - Complete class-level code based on method stubs and docstrings.
 
 ## Contributors
 
