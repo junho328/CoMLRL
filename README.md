@@ -60,7 +60,7 @@ $$
 
 This library supports LLM collaboration in various environments:
 
-- Writing Collaboration
+- Writing Collaboration: Multiple LLM agents collaborate on processing articles.
   - [TLDR](https://huggingface.co/datasets/trl-lib/tldr) - Summarizing Reddit posts.
   - [ArXiv](http://arxiv.org/abs/1905.00075) - Expanding abstracts into introductions.
 - [Code Generation](https://github.com/OpenMLRL/LLM_Collab_Code_Generation): Generate code solutions for programming problems.
