@@ -72,6 +72,16 @@ class MAGRPOConfig(TrainingArguments):
         },
     )
 
+    # Evaluation
+    eval_interval: int = field(
+        default=4,
+        metadata={"help": "Run evaluation every N training batches."},
+    )
+    eval_num_samples: int = field(
+        default=4,
+        metadata={"help": "Number of samples to evaluate per evaluation run."},
+    )
+
 
 class MAGRPOTrainer:
     """
@@ -715,10 +725,12 @@ class MAGRPOTrainer:
             else:
                 it = enumerate(dl)
             for batch_idx, batch in it:
-                # evaluate every 4 batches
-                if batch_idx % 4 == 0:
+                # Periodic evaluation based on configuration
+                if int(self.args.eval_interval) > 0 and (
+                    batch_idx % int(self.args.eval_interval) == 0
+                ):
                     # evaluate() already logs its metrics; avoid duplicate logging here
-                    _ = self.evaluate(num_eval_samples=4)
+                    _ = self.evaluate(num_eval_samples=int(self.args.eval_num_samples))
 
                 # Process single batch item (batch_size=1 enforced)
                 batch_item = batch[0]
