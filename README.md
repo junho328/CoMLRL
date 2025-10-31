@@ -8,7 +8,7 @@
 [![Hugging Face](https://img.shields.io/badge/huggingface-CoMLRL-yellow.svg)](https://huggingface.co/CoMLRL)
 [![arXiv](https://img.shields.io/badge/arXiv-2508.04652-b31b1b.svg)](https://arxiv.org/pdf/2508.04652)
 
-**Co**operative **M**ulti-**L**LM **R**einforcement **L**earning (**CoMLRL**) is a open-source library for training multiple LLM agents to collaborate using multi-agent reinforcement learning (MARL). It provides implementations of various MARL algorithms tailored for LLM collaboration tasks, along with support for different environments and benchmarks.
+**Co**operative **M**ulti-**L**LM **R**einforcement **L**earning (**CoMLRL**) is a open-source library for training multiple LLM agents to collaborate using multi-agent reinforcement learning (MARL). It provides implementations of various MARL algorithms for LLM collaboration tasks and support for different environments and benchmarks.
 
 ## Setup
 
