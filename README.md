@@ -3,9 +3,8 @@
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
 [![CI](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml)
 [![pre-commit.ci](https://github.com/OpenMLRL/CoMLRL/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/pre-commit.yml)
-<!-- Docs workflow is disabled while the repo is private
-[![Docs](https://github.com/OpenMLRL/CoMLRL/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/docs.yml)
--->
+[![OpenMLRL](https://img.shields.io/badge/OpenMLRL-Project-blue.svg)](https://openmlrl.github.io)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-red.svg)](https://opensource.org/licenses/MIT)
 [![code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Hugging Face](https://img.shields.io/badge/huggingface-CoMLRL-yellow.svg)](https://huggingface.co/CoMLRL)
