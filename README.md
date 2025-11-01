@@ -10,17 +10,21 @@
 
 **Co**operative **M**ulti-**L**LM **R**einforcement **L**earning (**CoMLRL**) is a open-source library for training multiple LLM agents to collaborate using multi-agent reinforcement learning (MARL). It provides implementations of various MARL algorithms for LLM collaboration tasks and support for different environments and benchmarks.
 
-<img src="/docs/dec-pomdp.png" width="600px;" alt=""/>
+<img src="docs/assets/dec-pomdp.png" width="600px;" alt=""/>
 
 ## Installation
+
+To install a stable version from PyPI:
+
+```bash
+pip install comlrl
+```
 
 To use the latest version of CoMLRL, clone the repository and install the required dependencies:
 
 ```bash
 cd CoMLRL
-conda create -n comlrl python=3.10
-conda activate comlrl
-pip install -r requirements.txt # torch need to be compatible
+pip install -r requirements.txt  # ensure torch wheel is compatible
 pip install -e .
 ```
 

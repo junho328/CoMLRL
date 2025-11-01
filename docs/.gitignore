@@ -1,0 +1,8 @@
+# Hugo build output (we deploy via GitHub Actions)
+public/
+resources/
+.hugo_build.lock
+
+# Hugo module cache (local only)
+/.hugo_cache/
+.cache/

@@ -1,0 +1,87 @@
+$menu-bg: #f7f7f8;
+$menu-border: #e5e5e5;
+$menu-hover: #ececec;
+$menu-text: #111;
+
+.book-menu {
+  background: $menu-bg;
+  border-right: 1px solid $menu-border;
+  color: $menu-text;
+  flex: 0 0 16rem;
+  width: 16rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: auto;
+}
+
+.book-menu .book-menu-content {
+  padding: 0.75rem;
+}
+
+.book-menu a {
+  display: block;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  color: $menu-text;
+  text-decoration: none;
+}
+
+.book-menu a:hover {
+  background: $menu-hover;
+}
+
+.book-menu a.active,
+.book-menu li.active > a,
+.book-menu a[aria-current="page"],
+.book-menu a[aria-current="true"] {
+  background: $menu-border;
+}
+
+.book-menu a:focus-visible {
+  outline: 2px solid #6ea8fe;
+  outline-offset: 2px;
+}
+
+.book-brand,
+.book-brand a {
+  font-weight: 700;
+  font-size: 1.2rem; /* brand size */
+}
+
+/* Make only top-level section titles bold; keep nested items normal */
+/* Bold + non-clickable for top-level section titles */
+.book-menu li.book-section > a,
+.book-menu li.book-section-flat > a,
+.book-menu .book-menu-content > ul > li > a {
+  font-weight: 700 !important;
+  pointer-events: none;
+  cursor: default;
+  font-size: 1rem; /* section name size */
+}
+.book-menu li.book-section > label,
+.book-menu li.book-section > summary,
+.book-menu .book-menu-content > ul > li > label,
+.book-menu .book-menu-content > ul > li > summary {
+  font-weight: 700 !important;
+  font-size: 1rem; /* section name size */
+}
+
+/* Reset nested lists (children) to normal weight and clickable */
+.book-menu li.book-section ul a,
+.book-menu li.book-section-flat ul a,
+.book-menu .book-menu-content > ul > li ul a {
+  font-weight: 400 !important;
+  pointer-events: auto;
+  cursor: pointer;
+  padding-left: 1.5rem; /* adjusted indent for child items */
+  font-size: 0.85rem; /* file (page) link size */
+}
+
+/* Optional: indent nested labels as well */
+.book-menu li.book-section ul label,
+.book-menu li.book-section-flat ul label,
+.book-menu .book-menu-content > ul > li ul label {
+  padding-left: 1.5rem;
+  font-size: 0.85rem;
+}

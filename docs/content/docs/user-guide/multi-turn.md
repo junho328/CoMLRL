@@ -1,0 +1,54 @@
+---
+title: Multi-Turn Training
+linkTitle: Multi-Turn Training
+weight: 3
+math: true
+---
+
+## Overview
+
+Multi‑turn training allows agents to iteratively refine outputs over \(T\) turns. The number of turns (\(T\)) and generations per turn (\(G\)) determine search breadth and cost.
+
+## Branching and complexity
+
+- Align: total leaves ~ \(G^T\)
+- Cross: total leaves ~ \(G^{N\cdot T}\) (N agents)
+
+At each node (turn), the sibling set size is \(G\) for align and \(G^N\) for cross. Increase \(T\) and/or \(G\) to explore more paths, trading off wall‑time and evaluation cost.
+
+## Joint Mode (recap)
+
+- align (default): pairs the g‑th generation of every agent → \(G\) joint actions per node.
+- cross: Cartesian product within a node → \(G^N\) joint actions per node (N agents).
+
+## External feedback
+
+Controls how environment feedback is attached to the next turn’s prompts.
+
+- Mode (`external.mode`): default `level_feedback` (adds diagnostics)
+  - expert_edits: an LLM proposes edits; prompts include edit suggestions + context
+  - level_passed / passed: binary outcome oriented prompts with minimal context
+  - plain: no diagnostics; still includes previous response and a “revise” instruction
+
+- Sandbox slice (`external.sandbox_slice`): how many eval tests to include in feedback (analysis‑based modes)
+  - 1 (default): first assert only
+  - 0, None, or 'all': include all eval tests
+  - Negative values: use the last asserts
+  - No effect in `expert_edits` mode
+
+- Expert edits model (`external.expert_edits_model`): model used to propose edits in `expert_edits` mode (default: DeepSeek‑Coder). Can be changed to Claude, GPT, etc., when keys/tokens are configured.
+
+## Termination
+
+Early‑stop criterion per node/turn based on mean immediate reward over sibling joint actions. If the mean exceeds the threshold, the branch stops expanding at this turn and backpropagates from the truncated subtree. Other branches continue.
+
+## Practical settings
+
+- Start with \(T=2\) and \(G\in[2,4]\) to validate the pipeline.
+- Use `align` for faster iterations; try `cross` when estimation quality matters.
+- If feedback is noisy, reduce `external.sandbox_slice` or simplify prompts.
+
+## Common pitfalls
+
+- Exploding cost with high \(T\)/\(G\): cap `max_new_tokens` and reduce generations.
+- Misaligned prompts across agents lead to unstable credit assignment.
