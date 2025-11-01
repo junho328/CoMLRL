@@ -27,7 +27,6 @@ Controls how environment feedback is attached to the next turn’s prompts.
 
 - Mode (`external.mode`): default `level_feedback` (adds diagnostics)
   - expert_edits: an LLM proposes edits; prompts include edit suggestions + context
-  - level_passed / passed: binary outcome oriented prompts with minimal context
   - plain: no diagnostics; still includes previous response and a “revise” instruction
 
 - Sandbox slice (`external.sandbox_slice`): how many eval tests to include in feedback (analysis‑based modes)
