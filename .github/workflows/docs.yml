@@ -37,6 +37,7 @@ jobs:
         uses: actions/configure-pages@v5
         with:
           static_site_generator: hugo
+          enablement: true
 
       - name: Build with Hugo
         run: hugo --gc --minify -s docs -b "${{ steps.pages.outputs.base_url }}"
