@@ -1,4 +1,4 @@
-<img src="docs/assets/comlrl.png" width="300px;" alt=""/>
+<img src="docs/assets/comlrl.png" width="400px;" alt=""/>
 
 ---
 
