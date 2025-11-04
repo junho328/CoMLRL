@@ -111,9 +111,7 @@ def example_usage():
         tokenizer=tokenizer,
         wandb_config=wandb_config,
     )
-
     trainer.train()
-    trainer.save_model(f"{config.output_dir}/final_models")
     print("Training complete!")
 
 
