@@ -110,7 +110,9 @@ This library supports LLM collaboration in various environments:
 - [Code Completion](https://github.com/OpenMLRL/LLM_Collab_Code_Completion): Complete code snippets based on given contexts.
   - [ClassEval](https://conf.researchr.org/details/icse-2024/icse-2024-research-track/219/Evaluating-Large-Language-Models-in-Class-Level-Code-Generation) - Complete class-level code based on method stubs and docstrings.
 
-## Contributors
+## Contributing
+
+See [Contributing](https://OpenMLRL.github.io/CoMLRL/contributing/) guidelines on setting up a development environment.
 
 Thanks especially to the gracious help of contributors:
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
@@ -124,8 +126,6 @@ Thanks especially to the gracious help of contributors:
 </table>
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 <sub>🤔 - Foundational Ideas; 🚧 - Maintenance; 💻 - Code; 📖 - Documentation; 🐛 - Bug Report.</sub>
-
-See [Contributing](https://OpenMLRL.github.io/CoMLRL/contributing/) guidelines on setting up a development environment.
 
 ## Citation
 
