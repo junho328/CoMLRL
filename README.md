@@ -123,7 +123,9 @@ Thanks especially to the gracious help of contributors:
  </tr>
 </table>
 <!-- ALL-CONTRIBUTORS-LIST:END -->
-🤔 - Foundational Ideas; 🚧 - Maintenance; 💻 -  Code; 📖 - Documentation; 🐛 - Bug Report.
+<sub>🤔 - Foundational Ideas; 🚧 - Maintenance; 💻 - Code; 📖 - Documentation; 🐛 - Bug Report.</sub>
+
+See [Contributing](https://OpenMLRL.github.io/CoMLRL/contributing/) guidelines on setting up a development environment.
 
 ## Citation
 
