@@ -26,11 +26,11 @@ To use the latest version of CoMLRL, clone the repository, and install it in edi
 
 ```bash
 cd CoMLRL
-pip install -r requirements.txt  # ensure torch is compatible
+pip install -r requirements.txt
 pip install -e .
 ```
 
-Please make sure `torch` is installed separately according to your system and CUDA version.
+Please make sure a compatible `torch` is installed according to your system and CUDA version.
 
 ## Usage
 
