@@ -47,7 +47,7 @@ class IPPOConfig:
     mini_batch_size: int = 4
     ppo_epochs: int = 4
     clip_range: float = 0.2
-    value_clip_range: Optional[float] = None
+    value_clip_range: Optional[float] = 0.2
     value_loss_coef: float = 0.5
     entropy_coef: float = 0.01
     advantage_normalization: bool = True
@@ -71,6 +71,8 @@ class IPPOConfig:
     num_turns: int = 1
     logging_steps: int = 10
     log_rollouts: bool = False
+    normalize_rewards: bool = True
+    reward_norm_eps: float = 1e-3
 
     def __post_init__(self) -> None:
         if self.rollout_buffer_size < 1:
@@ -537,6 +539,9 @@ class IPPOTrainer:
         if not rollouts:
             return
 
+        if self.args.normalize_rewards:
+            self._normalize_returns(rollouts)
+
         advantages = torch.stack(
             [sample.advantage.to(torch.float32).view(-1)[0] for sample in rollouts]
         )
@@ -550,12 +555,41 @@ class IPPOTrainer:
             for sample in rollouts:
                 sample.normalized_advantage = sample.advantage.clone()
 
+    def _normalize_returns(self, rollouts: List[RolloutSample]) -> None:
+        returns = torch.stack([sample.returns for sample in rollouts]).float()
+        returns = returns.view(len(rollouts), -1)
+        flat = returns.view(-1)
+        if flat.numel() < 2:
+            return
+
+        mean = flat.mean()
+        std = flat.std(unbiased=False)
+        if std < self.args.reward_norm_eps:
+            return
+        normalized = (returns - mean) / std
+
+        for sample, norm_value in zip(rollouts, normalized):
+            norm_tensor = (
+                norm_value.view_as(sample.returns)
+                .to(sample.returns.dtype)
+                .detach()
+                .clone()
+            )
+            sample.returns = norm_tensor
+            sample.advantage = norm_tensor - sample.old_value.to(norm_tensor.dtype)
+            sample.normalized_advantage = None
+
     def _ppo_step(self, batch: List[RolloutSample]) -> Dict[str, float]:
         actor_losses: List[torch.Tensor] = []
         value_losses: List[torch.Tensor] = []
         entropies: List[torch.Tensor] = []
         approx_kls: List[torch.Tensor] = []
         ratios: List[torch.Tensor] = []
+        normalized_adv_values: List[float] = []
+        raw_adv_values: List[float] = []
+        return_values: List[float] = []
+        old_value_values: List[float] = []
+        value_pred_values: List[float] = []
 
         for sample in batch:
             sequences = sample.full_input_ids.to(self.device).unsqueeze(0)
@@ -580,9 +614,23 @@ class IPPOTrainer:
                     raise RuntimeError("Value head missing for shared actor-critic.")
                 value = actor_value
 
+            old_value = sample.old_value.to(self.device, dtype=value.dtype)
             old_logprob = sample.old_logprob.to(self.device)
-            advantage = sample.normalized_advantage.to(self.device)
-            returns = sample.returns.to(self.device)
+            advantage = sample.normalized_advantage.to(self.device, dtype=value.dtype)
+            raw_advantage = sample.advantage.to(self.device, dtype=value.dtype)
+            returns = sample.returns.to(self.device, dtype=value.dtype)
+
+            if (
+                not torch.isfinite(logprob).all()
+                or not torch.isfinite(old_logprob).all()
+            ):
+                raise FloatingPointError(
+                    "Encountered non-finite logprob during PPO step."
+                )
+            if not torch.isfinite(advantage).all():
+                raise FloatingPointError("Advantage contains non-finite values.")
+            if not torch.isfinite(returns).all():
+                raise FloatingPointError("Returns contain non-finite values.")
 
             ratio = torch.exp(logprob - old_logprob)
             clipped_ratio = torch.clamp(
@@ -597,8 +645,8 @@ class IPPOTrainer:
                 self.args.value_clip_range is not None
                 and not self.args.use_separate_critic
             ):
-                clipped_value = sample.old_value.to(self.device) + torch.clamp(
-                    value - sample.old_value.to(self.device),
+                clipped_value = old_value + torch.clamp(
+                    value - old_value,
                     -self.args.value_clip_range,
                     self.args.value_clip_range,
                 )
@@ -614,6 +662,21 @@ class IPPOTrainer:
             entropies.append(entropy)
             approx_kls.append((old_logprob - logprob).detach())
             ratios.append(ratio.detach())
+            normalized_adv_values.extend(
+                advantage.detach().to(torch.float32).view(-1).cpu().tolist()
+            )
+            raw_adv_values.extend(
+                raw_advantage.detach().to(torch.float32).view(-1).cpu().tolist()
+            )
+            return_values.extend(
+                returns.detach().to(torch.float32).view(-1).cpu().tolist()
+            )
+            old_value_values.extend(
+                old_value.detach().to(torch.float32).view(-1).cpu().tolist()
+            )
+            value_pred_values.extend(
+                value.detach().to(torch.float32).view(-1).cpu().tolist()
+            )
 
         actor_loss = torch.stack(actor_losses).mean()
         value_loss = torch.stack(value_losses).mean()
@@ -621,8 +684,31 @@ class IPPOTrainer:
         approx_kl = torch.stack(approx_kls).mean()
         ratio_mean = torch.stack(ratios).mean()
 
+        def _summarize(values: List[float], prefix: str) -> Dict[str, float]:
+            if not values:
+                return {}
+            tensor = torch.tensor(values, dtype=torch.float32)
+            summary = {
+                f"{prefix}_mean": float(tensor.mean().item()),
+                f"{prefix}_abs_max": float(tensor.abs().max().item()),
+            }
+            if tensor.numel() > 1:
+                summary[f"{prefix}_std"] = float(tensor.std(unbiased=False).item())
+            return summary
+
+        if not torch.isfinite(actor_loss) or not torch.isfinite(value_loss):
+            raise FloatingPointError(
+                "Non-finite policy/value loss detected. Reduce learning rates or "
+                "adjust normalization settings."
+            )
+
         actor_total = actor_loss - self.args.entropy_coef * entropy_mean
         value_total = self.args.value_loss_coef * value_loss
+
+        if not torch.isfinite(actor_total) or not torch.isfinite(value_total):
+            raise FloatingPointError(
+                "Non-finite combined PPO loss encountered. Training halted."
+            )
 
         if self.args.use_separate_critic:
             self.actor_optimizer.zero_grad()
@@ -652,6 +738,11 @@ class IPPOTrainer:
             "entropy": entropy_mean.detach().item(),
             "approx_kl": approx_kl.item(),
             "ratio": ratio_mean.item(),
+            **_summarize(normalized_adv_values, "advantage_norm"),
+            **_summarize(raw_adv_values, "advantage_raw"),
+            **_summarize(return_values, "returns"),
+            **_summarize(old_value_values, "old_value"),
+            **_summarize(value_pred_values, "value_pred"),
         }
 
     def _update(self, rollouts: List[RolloutSample]) -> Dict[str, float]:
