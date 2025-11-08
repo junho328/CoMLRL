@@ -40,3 +40,4 @@ repos:
     hooks:
       - id: codespell
         args: [ "-Lhist,gaus,nd,ine", "-w" ]
+        exclude: 'docs/(assets|static)/.*\.svg$'
