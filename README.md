@@ -12,6 +12,8 @@
 
 **Co**operative **M**ulti-**L**LM **R**einforcement **L**earning (**CoMLRL**) is a open-source library for training multiple LLMs to collaborate using Multi-Agent Reinforcement Learning (MARL). It provides implementations of various MARL algorithms for LLM collaboration and support for different environments and benchmarks.
 
+## Features
+
 <img src="docs/assets/demo.gif" width="400px;" alt=""/>
 
 ## Installation
