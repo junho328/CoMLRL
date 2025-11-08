@@ -7,19 +7,19 @@ math: true
 
 ## Overview
 
-Multi‑turn training allows agents to iteratively refine outputs over \(T\) turns. The number of turns (\(T\)) and generations per turn (\(G\)) determine search breadth and cost.
+Multi‑turn training allows agents to iteratively refine outputs over {{< katex inline=true >}}T{{< /katex >}} turns. The number of turns ({{< katex inline=true >}}T{{< /katex >}}) and generations per turn ({{< katex inline=true >}}G{{< /katex >}}) determine search breadth and cost.
 
 ## Branching and complexity
 
-- Align: total leaves ~ \(G^T\)
-- Cross: total leaves ~ \(G^{N\cdot T}\) (N agents)
+- Align: total leaves ~ {{< katex inline=true >}}G^T{{< /katex >}}
+- Cross: total leaves ~ {{< katex inline=true >}}G^{N \cdot T}{{< /katex >}} (N agents)
 
-At each node (turn), the sibling set size is \(G\) for align and \(G^N\) for cross. Increase \(T\) and/or \(G\) to explore more paths, trading off wall‑time and evaluation cost.
+At each node (turn), the sibling set size is {{< katex inline=true >}}G{{< /katex >}} for align and {{< katex inline=true >}}G^N{{< /katex >}} for cross. Increase {{< katex inline=true >}}T{{< /katex >}} and/or {{< katex inline=true >}}G{{< /katex >}} to explore more paths, trading off wall‑time and evaluation cost.
 
 ## Joint Mode (recap)
 
-- align (default): pairs the g‑th generation of every agent → \(G\) joint actions per node.
-- cross: Cartesian product within a node → \(G^N\) joint actions per node (N agents).
+- align (default): pairs the g‑th generation of every agent → {{< katex inline=true >}}G{{< /katex >}} joint actions per node.
+- cross: Cartesian product within a node → {{< katex inline=true >}}G^N{{< /katex >}} joint actions per node (N agents).
 
 ## External feedback
 
@@ -43,11 +43,11 @@ Early‑stop criterion per node/turn based on mean immediate reward over sibling
 
 ## Practical settings
 
-- Start with \(T=2\) and \(G\in[2,4]\) to validate the pipeline.
+- Start with {{< katex inline=true >}}T = 2{{< /katex >}} and {{< katex inline=true >}}G \in [2, 4]{{< /katex >}} to validate the pipeline.
 - Use `align` for faster iterations; try `cross` when estimation quality matters.
 - If feedback is noisy, reduce `external.sandbox_slice` or simplify prompts.
 
 ## Common pitfalls
 
-- Exploding cost with high \(T\)/\(G\): cap `max_new_tokens` and reduce generations.
+- Exploding cost with high {{< katex inline=true >}}T{{< /katex >}}/{{< katex inline=true >}}G{{< /katex >}}: cap `max_new_tokens` and reduce generations.
 - Misaligned prompts across agents lead to unstable credit assignment.
