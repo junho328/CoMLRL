@@ -29,7 +29,7 @@ External feedback mechanisms control how environment observations are incorporat
 
 ### Built-in Modes
 
-CoMLRL's downstreaming environment repository  includes three example external transition modes for code generation tasks:
+CoMLRL's [environment repository](https://github.com/OpenMLRL/LLM_Collab_Code_Generation) includes 3 example external transition modes for code generation:
 
 {{% hint success %}}
 
