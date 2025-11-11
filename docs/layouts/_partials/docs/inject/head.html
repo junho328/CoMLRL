@@ -54,7 +54,7 @@
     }
   });
 
-  // Cmd+K / Ctrl+K shortcut for search, Cmd/Ctrl+O for OpenMLRL, Cmd/Ctrl+L for LovelyBuggies
+  // Cmd+K / Ctrl+K shortcut for search, Cmd/Ctrl+O for OpenMLRL
   document.addEventListener('keydown', function(e) {
     if (!(e.metaKey || e.ctrlKey)) return;
     var key = (e.key || '').toLowerCase();
@@ -70,10 +70,6 @@
       e.preventDefault();
       window.location.href = 'https://openmlrl.github.io';
       return;
-    }
-    if (key === 'l') {
-      e.preventDefault();
-      window.location.href = 'https://lovelybuggies.github.io';
     }
   });
 
