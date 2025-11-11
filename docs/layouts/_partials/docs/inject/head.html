@@ -54,7 +54,7 @@
     }
   });
 
-  // Cmd+K / Ctrl+K shortcut for search, Cmd/Ctrl+O for OpenMLRL
+  // Cmd+K / Ctrl+K shortcut for search, Cmd/Ctrl+O for OpenMLRL, Cmd/Ctrl+G for GitHub
   document.addEventListener('keydown', function(e) {
     if (!(e.metaKey || e.ctrlKey)) return;
     var key = (e.key || '').toLowerCase();
@@ -69,6 +69,11 @@
     if (key === 'o') {
       e.preventDefault();
       window.location.href = 'https://openmlrl.github.io';
+      return;
+    }
+    if (key === 'g') {
+      e.preventDefault();
+      window.location.href = 'https://github.com/OpenMLRL/CoMLRL';
       return;
     }
   });
