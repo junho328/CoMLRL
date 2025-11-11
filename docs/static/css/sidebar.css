@@ -1,5 +1,7 @@
-/* Sidebar navigation color overrides */
+/* Import Montserrat Alternates font from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat+Alternates:wght@400;700&display=swap');
 
+/* Sidebar navigation color overrides */
 /* Section titles (top-level) */
 .book-menu li.book-section > a,
 .book-menu li.book-section-flat > a,
@@ -48,4 +50,21 @@
 /* Hide original text label when logo is present */
 .book-brand span {
   display: none;
+}
+
+/* Environments section and child items use purple-gray color and Montserrat Alternates font */
+.book-menu .book-menu-content > ul > li:last-child > a,
+.book-menu .book-menu-content > ul > li:last-child > label,
+.book-menu .book-menu-content > ul > li:last-child > summary,
+.book-menu .book-menu-content nav > ul > li:last-child > a,
+.book-menu .book-menu-content nav > ul > li:last-child > label,
+.book-menu .book-menu-content nav > ul > li:last-child > summary {
+  color: #9555af !important;
+  font-family: 'Montserrat Alternates', sans-serif !important;
+}
+
+.book-menu .book-menu-content > ul > li:last-child ul li a,
+.book-menu .book-menu-content nav > ul > li:last-child ul li a {
+  color: #9555af !important;
+  font-family: 'Montserrat Alternates', sans-serif !important;
 }
