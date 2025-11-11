@@ -1,6 +1,6 @@
 # <img src="docs/assets/comlrl.png" width="400px;" alt=""/>
 
-[![OpenMLRL](https://img.shields.io/badge/OpenMLRL-Project-888DA6.svg?logoColor=black)](https://openmlrl.github.io)
+[![OpenMLRL](https://img.shields.io/badge/OpenMLRL-Projects-888DA6.svg?logoColor=black)](https://openmlrl.github.io)
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-CoMLRL-yellow.svg?logo=huggingface&logoColor=darkgrey)](https://huggingface.co/CoMLRL)
 [![arXiv](https://img.shields.io/badge/arXiv-2508.04652-b31b1b.svg?logo=arxiv&logoColor=darkgrey)](https://arxiv.org/pdf/2508.04652)
 
