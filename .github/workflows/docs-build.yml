@@ -38,10 +38,25 @@ jobs:
 
     - name: Deploy to OpenMLRL.github.io
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        personal_token: ${{ secrets.OPENMLRL_TOKEN }}
-        external_repository: OpenMLRL/OpenMLRL.github.io
-        publish_dir: ./docs/public
-        publish_branch: main
-        destination_dir: CoMLRL
+      env:
+        GITHUB_TOKEN: ${{ secrets.OPENMLRL_TOKEN }}
+      run: |
+        # Clone the OpenMLRL.github.io repository
+        git clone --depth 1 https://x-access-token:${GITHUB_TOKEN}@github.com/OpenMLRL/OpenMLRL.github.io.git /tmp/openmlrl-site
+
+        # Update only the CoMLRL subdirectory
+        rm -rf /tmp/openmlrl-site/CoMLRL
+        mkdir -p /tmp/openmlrl-site/CoMLRL
+        cp -r docs/public/* /tmp/openmlrl-site/CoMLRL/
+
+        # Commit and push changes
+        cd /tmp/openmlrl-site
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add CoMLRL/
+        if git diff --staged --quiet; then
+          echo "No changes to deploy"
+        else
+          git commit -m "Deploy CoMLRL docs from commit ${{ github.sha }}"
+          git push origin main
+        fi
