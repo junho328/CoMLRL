@@ -26,23 +26,25 @@
 
 ```bash
 pip install comlrl
-# Install PyTorch compatible with your device
+# install PyTorch compatible with your device
 ```
 
 ### Install from conda-forge
 
 ```bash
 conda install -c conda-forge comlrl
-# Install PyTorch compatible with your device
+# install PyTorch compatible with your device
 ```
 
 ### Install from source
+
+To access the latest features, you can install CoMLRL from source:
 
 ```bash
 git clone https://github.com/OpenMLRL/CoMLRL.git
 cd CoMLRL
 pip install -e .
-# Install PyTorch compatible with your device
+# install PyTorch compatible with your device
 ```
 
 ## Features
