@@ -4,15 +4,15 @@
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-CoMLRL-yellow.svg?logo=huggingface&logoColor=darkgrey)](https://huggingface.co/CoMLRL)
 [![arXiv](https://img.shields.io/badge/arXiv-2508.04652-b31b1b.svg?logo=arxiv&logoColor=darkgrey)](https://arxiv.org/pdf/2508.04652)
 
-<!-- [![PyPI version](https://img.shields.io/pypi/v/comlrl.svg?logo=pypi&logoColor=white)](https://pypi.org/project/comlrl/) -->
-<!-- [![Conda version](https://img.shields.io/conda/vn/conda-forge/comlrl.svg?logo=conda-forge&logoColor=white)](https://anaconda.org/conda-forge/comlrl) -->
-<!-- [![PyPI downloads](https://img.shields.io/pypi/dm/comlrl.svg)](https://pypi.org/project/comlrl/) -->
-<!-- [![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://openmlrl.github.io/CoMLRL/) -->
+[![PyPI version](https://img.shields.io/pypi/v/comlrl.svg?logo=pypi&logoColor=white)](https://pypi.org/project/comlrl/)
+[![Conda version](https://img.shields.io/conda/vn/conda-forge/comlrl.svg?logo=conda-forge&logoColor=white)](https://anaconda.org/conda-forge/comlrl)
+[![PyPI downloads](https://img.shields.io/pypi/dm/comlrl.svg)](https://pypi.org/project/comlrl/)
+[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://openmlrl.github.io/CoMLRL/)
 
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg?logo=python&logoColor=darkgrey)](https://www.python.org/downloads/release/python-3100/)
-<!-- [![CI](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml) -->
-<!-- [![pre-commit.ci](https://github.com/OpenMLRL/CoMLRL/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/pre-commit.yml) -->
-<!-- [![Docs Build](https://github.com/OpenMLRL/CoMLRL/actions/workflows/docs-build.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/docs-build.yml) -->
+[![CI](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml)
+[![pre-commit.ci](https://github.com/OpenMLRL/CoMLRL/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/pre-commit.yml)
+[![Docs Build](https://github.com/OpenMLRL/CoMLRL/actions/workflows/docs-build.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/docs-build.yml)
 
 [![code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-orange.svg)](https://opensource.org/licenses/BSD-3-Clause)
