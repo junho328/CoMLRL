@@ -44,16 +44,16 @@ jobs:
         # Clone the OpenMLRL.github.io repository
         git clone --depth 1 https://x-access-token:${GITHUB_TOKEN}@github.com/OpenMLRL/OpenMLRL.github.io.git /tmp/openmlrl-site
 
-        # Update only the CoMLRL subdirectory
-        rm -rf /tmp/openmlrl-site/CoMLRL
-        mkdir -p /tmp/openmlrl-site/CoMLRL
-        cp -r docs/public/* /tmp/openmlrl-site/CoMLRL/
+        # Deploy to static/CoMLRL so Hugo will copy it to public/CoMLRL
+        rm -rf /tmp/openmlrl-site/static/CoMLRL
+        mkdir -p /tmp/openmlrl-site/static/CoMLRL
+        cp -r docs/public/* /tmp/openmlrl-site/static/CoMLRL/
 
         # Commit and push changes
         cd /tmp/openmlrl-site
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add CoMLRL/
+        git add static/CoMLRL/
         if git diff --staged --quiet; then
           echo "No changes to deploy"
         else
