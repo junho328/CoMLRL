@@ -51,7 +51,7 @@ setup(
     use_scm_version=True,
     setup_requires=["setuptools-scm"],
     packages=find_packages(),
-    python_requires=">=3.8",
+    python_requires=">=3.10",
     install_requires=core_requires,
     extras_require=extras_require,
     description=short_description,
