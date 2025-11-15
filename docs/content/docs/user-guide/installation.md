@@ -5,26 +5,27 @@ weight: 1
 
 You can create a venv or conda environment with Python 3.10+ and install CoMLRL as follows.
 
-To install the stable version of this library from PyPI using pip:
+## Install from PyPI
 
 ```bash
 pip install comlrl
+# Install PyTorch compatible with your device
 ```
 
-Or from conda-forge using conda:
+## Install from conda-forge
 
 ```bash
 conda install -c conda-forge comlrl
+# Install PyTorch compatible with your device
 ```
 
-To access the latest features of CoMLRL, please clone this repository and install it in editable mode:
+## Install from source
+
+To access the latest features of CoMLRL, clone this repository and install in editable mode:
 
 ```bash
+git clone https://github.com/OpenMLRL/CoMLRL.git
 cd CoMLRL
-pip install -r requirements.txt
 pip install -e .
+# Install PyTorch compatible with your device
 ```
-
-{{% hint warning %}}
-Please make sure you have compatible `torch` installed according to your CUDA.
-{{% /hint %}}

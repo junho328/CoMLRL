@@ -21,27 +21,28 @@
 
 ## Installation
 
-You can install the stable version of this library from PyPI using pip:
+### Install from PyPI (Recommended)
 
 ```bash
 pip install comlrl
+# Install PyTorch compatible with your device
 ```
 
-Or from conda-forge using conda:
+### Install from conda-forge
 
 ```bash
 conda install -c conda-forge comlrl
+# Install PyTorch compatible with your device
 ```
 
-If you want to use the latest version of CoMLRL, please clone this repository and install it in editable mode:
+### Install from source
 
 ```bash
+git clone https://github.com/OpenMLRL/CoMLRL.git
 cd CoMLRL
-pip install -r requirements.txt
 pip install -e .
+# Install PyTorch compatible with your device
 ```
-
-<em><sub>Note: Make sure you have a compatible `torch` installed according to the CUDA.</sub></em>
 
 ## Features
 

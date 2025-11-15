@@ -42,7 +42,7 @@
 
 /* Ensure sidebar logo displays at readable size */
 .book-brand img {
-  width: 160px;
+  width: 200px;
   height: auto;
   display: block;
 }

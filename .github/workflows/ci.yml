@@ -21,8 +21,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -e .
+          pip install --no-cache-dir setuptools-scm>=8.0.0
+          pip install --no-cache-dir numpy>=1.21.0 packaging>=21.0 pyyaml>=6.0.1 tqdm>=4.65.0
+          pip install --no-cache-dir -e . --no-deps
 
       - name: Test imports
         run: |
