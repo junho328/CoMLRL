@@ -10,7 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # Required for trusted publishing
 
     steps:
     - name: Checkout code
@@ -36,7 +35,5 @@ jobs:
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      # Using trusted publishing (recommended - configure at https://pypi.org/manage/account/publishing/)
-      # Alternative: use API token by setting PYPI_API_TOKEN secret and uncommenting below:
-      # with:
-      #   password: ${{ secrets.PYPI_API_TOKEN }}
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
