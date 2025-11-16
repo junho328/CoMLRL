@@ -37,6 +37,12 @@ Cooperative MARL methods are grounded in the theory of <a href="https://www.fran
 
 {{% tab "Q&A" %}}
 
+<em style="font-weight: 600; color: #9555af; margin-bottom: -0.5rem; display: block;"> "What are the differences between CoMLRL and other multi-LLM training frameworks?"</em>
+
+Compared with role-conditioned, parameter-sharing approaches based on single-agent RL training framework, using truly distinct agents provides a better modeling where highly heterogeneous LLMs possess fundamentally different capabilities and aligns better with the concept of study — "multi-agent".
+
+CoMLRL implements MARL algorithms from scratch to maximize flexibility and customizability while maintaining simplicity for usage. Additionally, although agents can either be trained centralizedly or decentralizedly with CoMLRL, their execution is always fully decentralized to ensure the high efficiency of inference.
+
 <em style="font-weight: 600; color: #9555af; margin-bottom: -0.5rem; display: block;"> "Does CoMLRL support single-agent fine-tuning?"</em>
 
 <strong>Yes!</strong> The simplest way is to set `num_agents=1` in your trainer. But since we omit fancy optimizations for simplicity of multi-agent training, you may not find the single-agent trainers optimal. <a href="https://github.com/hiyouga/LLaMA-Factory">LLaMA-Factory</a>, <a href="https://github.com/huggingface/trl">trl</a>, <a href="https://github.com/OpenRLHF/OpenRLHF">OpenRLHF</a>, and <a href="https://github.com/volcengine/verl">verl</a> are good choices for single-agent fine-tuning.
@@ -47,7 +53,7 @@ Cooperative MARL methods are grounded in the theory of <a href="https://www.fran
 
 <em style="font-weight: 600; color: #9555af; margin-bottom: -0.5rem; display: block;"> "Does CoMLRL support distributed training?"</em>
 
-<strong>Not yet.</strong> We are currently focusing on <a href="https://arxiv.org/abs/2409.03052">CTDE</a> on proving the concepts of training small-scale LLMs with cooperative MARL. Resource-consuming distributed training with slow and complex gradient accumulation will be open-sourced in the near future.
+<strong>Not yet.</strong> We are currently focusing on <a href="https://arxiv.org/abs/2409.03052">CTDE</a> on light-weighted training small-scale LLMs with cooperative MARL for the proof of concepts. Resource-consuming distributed training with slow and complex gradient accumulation is under development and will be open-sourced in the near future.
 
 {{% /tab %}}
 
