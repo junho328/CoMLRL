@@ -16,7 +16,7 @@ title: ""
 
 A lot of works use role-conditioned, parameter-sharing approaches built on single-agent RL training framework to implement multi-agent training. Using truly distinct agents provides a better modeling where highly heterogeneous LLMs possess fundamentally different capabilities and aligns better with the concept of study — "multi-agent".
 
-CoMLRL implements MARL algorithms from scratch to maximize flexibility and customizability while maintaining simplicity for usage. Additionally, although agents can either be trained centralizedly or decentralizedly with CoMLRL, their execution is always fully decentralized to ensure efficient inference.
+Compare with other multi-LLM training frameworks, agents can either be trained centralizedly or decentralizedly with CoMLRL, while their execution is always fully decentralized to ensure efficient inference. CoMLRL implements standard MARL algorithms from scratch to maximize flexibility and customizability while maintaining simplicity for usage.
 
 <em style="font-weight: 600; color: #9555af; margin-bottom: -0.5rem; display: block;"> "Does CoMLRL support single-agent fine-tuning?"</em>
 
