@@ -3,12 +3,11 @@
 [![OpenMLRL](https://img.shields.io/badge/OpenMLRL-Projects-989DD6.svg?logoColor=black)](https://openmlrl.github.io)
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-CoMLRL-yellow.svg?logo=huggingface&logoColor=darkgrey)](https://huggingface.co/CoMLRL)
 [![arXiv](https://img.shields.io/badge/arXiv-2508.04652-b31b1b.svg?logo=arxiv&logoColor=darkgrey)](https://arxiv.org/pdf/2508.04652)
+[![Documentation](https://img.shields.io/badge/Documents-CoMLRL-blue.svg?logo=googledocs&logoColor=2f2f2f)](https://openmlrl.github.io/CoMLRL/)
 
 [![PyPI version](https://img.shields.io/pypi/v/comlrl.svg?logo=pypi&logoColor=white)](https://pypi.org/project/comlrl/)
 [![Conda version](https://img.shields.io/conda/vn/conda-forge/comlrl.svg?logo=conda-forge&logoColor=white)](https://anaconda.org/conda-forge/comlrl)
 [![PyPI downloads](https://img.shields.io/pypi/dm/comlrl.svg)](https://pypi.org/project/comlrl/)
-[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://openmlrl.github.io/CoMLRL/)
-
 
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg?logo=python&logoColor=darkgrey)](https://www.python.org/downloads/release/python-3100/)
 [![CI](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenMLRL/CoMLRL/actions/workflows/ci.yml)
