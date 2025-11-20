@@ -41,7 +41,7 @@ class IACConfig:
     max_grad_norm: float = 0.5
     rollout_buffer_size: int = 8
     mini_batch_size: int = 4
-    ppo_epochs: int = 1
+    ac_epochs: int = 1
     value_clip_range: Optional[float] = 0.2
     value_loss_coef: float = 0.5
     entropy_coef: float = 0.0
@@ -352,7 +352,7 @@ class IACTrainer:
                 "critic_learning_rate": self.args.critic_learning_rate,
                 "rollout_buffer_size": self.args.rollout_buffer_size,
                 "mini_batch_size": self.args.mini_batch_size,
-                "ppo_epochs": self.args.ppo_epochs,
+                "ac_epochs": self.args.ac_epochs,
                 "entropy_coef": self.args.entropy_coef,
                 "value_loss_coef": self.args.value_loss_coef,
                 "max_new_tokens": self.args.max_new_tokens,
@@ -647,7 +647,7 @@ class IACTrainer:
         return logprob_sum
 
     # --------------------------------------------------------------------- #
-    # PPO update logic
+    # Actor-Critic update logic
     # --------------------------------------------------------------------- #
     def _prepare_advantages(self, rollouts: List[RolloutSample]) -> None:
         if not rollouts:
@@ -692,7 +692,7 @@ class IACTrainer:
             sample.advantage = norm_tensor - sample.old_value.to(norm_tensor.dtype)
             sample.normalized_advantage = None
 
-    def _ppo_step(self, agent_idx: int, batch: List[RolloutSample]) -> Dict[str, float]:
+    def _ac_step(self, agent_idx: int, batch: List[RolloutSample]) -> Dict[str, float]:
         actor_model = self.actor_models[agent_idx]
         critic_model = (
             self.critic_models[agent_idx] if self.args.use_separate_critic else None
@@ -742,7 +742,7 @@ class IACTrainer:
                 or not torch.isfinite(old_logprob).all()
             ):
                 raise FloatingPointError(
-                    "Encountered non-finite logprob during PPO step."
+                    "Encountered non-finite logprob during AC step."
                 )
             if not torch.isfinite(advantage).all():
                 raise FloatingPointError("Advantage contains non-finite values.")
@@ -784,7 +784,7 @@ class IACTrainer:
 
         if not torch.isfinite(actor_total) or not torch.isfinite(value_total):
             raise FloatingPointError(
-                "Non-finite combined PPO loss encountered. Training halted."
+                "Non-finite combined AC loss encountered. Training halted."
             )
 
         if self.args.use_separate_critic:
@@ -840,7 +840,7 @@ class IACTrainer:
         random.shuffle(rollouts)
         for start in range(0, len(rollouts), self.args.mini_batch_size):
             batch = rollouts[start : start + self.args.mini_batch_size]
-            step_metrics = self._ppo_step(agent_idx, batch)
+            step_metrics = self._ac_step(agent_idx, batch)
             for key, value in step_metrics.items():
                 metrics[key].append(value)
 

@@ -4,7 +4,7 @@ weight: 3
 math: true
 ---
 
-Actor-Critic methods are widely used policy gradient approaches that employ generalized advantage estimation to estimate advantages, reducing the high variance and long rollout times in Monte Carlo methods, e.g., REINFORCE. Many LLM fine-tuning frameworks implement actor-critic training (e.g., [trl](https://huggingface.co/docs/trl/main/en/ppo_trainer), [verl](https://verl.readthedocs.io/en/latest/algo/ppo.html), [LLaMA Factory](https://llamafactory.readthedocs.io/en/latest/advanced/trainers.html#ppo)).
+Actor-Critic methods are widely used policy gradient approaches that employ generalized advantage estimation to estimate advantages, reducing the high variance and long rollout times in Monte Carlo methods, e.g., REINFORCE. Many LLM fine-tuning frameworks implement actor-critic training (e.g., [trl](https://huggingface.co/docs/trl), [verl](https://verl.readthedocs.io/en/latest/), [LLaMA Factory](https://llamafactory.readthedocs.io/en/latest/advanced/trainers.html)).
 
 ## IAC
 
@@ -33,7 +33,7 @@ CoMLRL supports two IAC architectures for critic implementation:
 - `max_grad_norm`: Maximum gradient norm for clipping
 - `rollout_buffer_size`: Number of samples to collect before update
 - `mini_batch_size`: Mini-batch size for policy updates
-- `ppo_epochs`: Number of optimization epochs per rollout
+- `ac_epochs`: Number of optimization epochs per rollout
 - `value_clip_range`: Clipping range for value function
 - `value_loss_coef`: Coefficient for value loss
 - `entropy_coef`: Coefficient for entropy bonus
