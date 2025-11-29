@@ -7,6 +7,10 @@ weight: 3
 
 ## Version 1.2.7
 
+The critic in IACTrainer now estimate V rather than Q.
+
+## Version 1.2.7
+
 Change the IPPOTrainer to be IACTrainer.
 
 ## Version 1.2.6
