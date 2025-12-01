@@ -77,3 +77,47 @@ For simplicity, IAC computes the policy gradient using the current policy's samp
 {{% hint warning %}}
 The trainer enforces `per_device_train_batch_size=1` and currently only supports single-turn training (`num_turns=1`).
 {{% /hint %}}
+
+## MAAC
+
+Multi-Agent Actor-Critic (MAAC) shares a centralized critic across agents. The policy update of MAAC is:
+
+{{< katex display=true >}}
+J(\theta_i) = \mathbb{E}\left[\log \pi_{\theta_i}(a_{i,t}|h_{i,t}) \cdot \mathbf{\Delta}_t + \beta \mathcal{H}(\pi_{\theta_i})\right]
+{{< /katex >}}
+
+where {{< katex inline=true >}}\mathbf{\Delta}_t = r_t + \gamma V_{\phi}(h_{t+1}^{\text{joint}}) - V_{\phi}(h_{t}^{\text{joint}}){{< /katex >}} uses the shared critic on the joint prompt/history, and {{< katex inline=true >}}\beta{{< /katex >}} is the entropy coefficient.
+
+{{% hint info %}}
+**MAACConfig** parameters:
+
+- `output_dir`: Directory to save outputs
+- `actor_learning_rate`: Learning rate for actors
+- `critic_learning_rate`: Learning rate for shared critic
+- `weight_decay`, `adam_beta1`, `adam_beta2`, `adam_epsilon`, `max_grad_norm`
+- `rollout_buffer_size`, `mini_batch_size`, `ac_epochs`
+- `value_loss_coef`, `entropy_coef`, `advantage_normalization`
+- `max_new_tokens`, `temperature`, `top_p`, `top_k`, `do_sample`
+- `num_train_epochs`, `per_device_train_batch_size` (must be 1)
+- `pad_token_id`
+- `num_agents`
+- `reward_norm_eps`
+- `num_return_sequences`
+- `critic_model_name_or_path`: Required shared critic identifier
+{{% /hint %}}
+
+{{% hint info %}}
+**MAACTrainer** setup:
+
+- `model`: Actor model identifier/string (required)
+- `tokenizer`: Tokenizer (required)
+- `reward_func`: Callable returning rewards (required)
+- `reward_processor`: Optional reward post-processor
+- `formatters`: Single callable or list for per-agent prompt formatting
+- `args`: Instance of `MAACConfig` (optional)
+- `train_dataset`: Training dataset (required)
+- `eval_dataset`: Optional evaluation dataset
+- `model_config`: Extra model kwargs (optional)
+- `wandb_config`: Weights & Biases logging config (optional)
+- `metrics_callback`: Optional callback for custom metrics
+{{% /hint %}}
