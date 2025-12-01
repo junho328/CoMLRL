@@ -52,8 +52,8 @@ pip install -e .
     - Aligned individual response joint with `joint_mode='align'`.
     - Memory-efficient cross joint with `joint_mode='cross'`.
   - **_Multi-Agent Actor-Critic:_** Critic-based policy gradient methods, including [IAC](https://github.com/OpenMLRL/CoMLRL/blob/main/comlrl/trainers/iac.py) and [MAAC](https://github.com/OpenMLRL/CoMLRL/blob/main/comlrl/trainers/maac.py).
-    - IAC: per-agent critic (separate or value-head over actor).
-    - MAAC: centralized critic over joint prompts, separate actors.
+    - Independent actor-critic (separate critic or value-head over LLM backbone).
+    - Centralized critic over joint prompts with separate actors.
 
 - **Environments that simulate real-world tasks for training and evaluating LLM collaboration:**
   - [**_Writing Collaboration_**](https://github.com/OpenMLRL/LLM_Collab_Writing): Multiple LLM agents collaborate on processing articles.
