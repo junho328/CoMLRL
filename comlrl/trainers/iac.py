@@ -884,11 +884,14 @@ class IACTrainer:
         if not rollouts:
             return {}
 
-        self._prepare_advantages(rollouts)
         rewards = torch.stack([sample.reward for sample in rollouts]).float()
+        returns_raw = torch.stack([sample.returns for sample in rollouts]).float()
+        self._prepare_advantages(rollouts)
 
         metrics = defaultdict(list)
         metrics["reward_mean"].append(rewards.mean().item())
+        if returns_raw.numel() > 0 and torch.isfinite(returns_raw).all():
+            metrics["expected_return"].append(returns_raw.mean().item())
 
         if self.metrics_callback is not None:
             try:

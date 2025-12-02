@@ -704,7 +704,9 @@ class MAACTrainer:
             [sample.reward.view(-1)[0] for sample in rollouts]
         ).float()
         if rewards.numel() > 0 and torch.isfinite(rewards).all():
-            metrics["reward_mean"].append(float(rewards.mean().item()))
+            mean_reward = float(rewards.mean().item())
+            metrics["reward_mean"].append(mean_reward)
+            metrics["expected_return"].append(mean_reward)
 
         for start in range(0, len(rollouts), self.args.mini_batch_size):
             batch = rollouts[start : start + self.args.mini_batch_size]
