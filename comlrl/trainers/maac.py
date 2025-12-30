@@ -17,6 +17,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
 )
+from tqdm import tqdm  # type: ignore
 
 import wandb
 from comlrl.models.actor_critic import CausalLMWithValueHead
@@ -32,43 +33,39 @@ class MAACConfig:
     """Configuration container for Multi-Agent Actor-Critic with shared critic."""
 
     output_dir: str = "./maac_output"
-    actor_learning_rate: float = 1e-6
-    critic_learning_rate: float = 1e-6
+    actor_learning_rate: float = 5e-6
+    critic_learning_rate: float = 5e-6
     weight_decay: float = 0.0
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     adam_epsilon: float = 1e-8
     max_grad_norm: float = 0.5
     rollout_buffer_size: int = 8
-    mini_batch_size: int = 4
-    value_loss_coef: float = 0.5
+    mini_batch_size: int = 8
+    value_loss_coef: float = 0.6
     advantage_normalization: bool = True
-    max_new_tokens: int = 128
-    temperature: float = 0.7
-    top_p: float = 0.9
+    max_new_tokens: int = 256
+    temperature: float = 0.6
+    top_p: float = 0.6
     top_k: Optional[int] = None
     do_sample: bool = True
-    num_train_epochs: int = 8
+    num_train_epochs: int = 40
     per_device_train_batch_size: int = 1
     pad_token_id: Optional[int] = None
     num_agents: int = 2
-    reward_norm_eps: float = 1e-3
     num_return_sequences: int = 1
     critic_model_name_or_path: Optional[Union[str, PreTrainedModel]] = None
-    num_turns: int = 1
+    num_turns: int = 2
     discount: float = 0.9
     critic_type: str = "v"  # "v" (V(s)) or "q" (Q(s,a))
-    early_termination_threshold: Optional[float] = None
-    eval_interval: int = 4
+    early_termination_threshold: Optional[float] = -0.2
+    eval_interval: int = 16
     eval_num_samples: int = 4
 
     def __post_init__(self) -> None:
         if self.rollout_buffer_size < 1:
             raise ValueError("rollout_buffer_size must be >= 1.")
-        if self.mini_batch_size < 1:
-            raise ValueError("mini_batch_size must be >= 1.")
-        if self.mini_batch_size > self.rollout_buffer_size:
-            self.mini_batch_size = self.rollout_buffer_size
+        self.mini_batch_size = self.rollout_buffer_size
         if self.per_device_train_batch_size != 1:
             raise ValueError("per_device_train_batch_size must be 1 for MAAC.")
         if self.num_agents < 1:
@@ -82,11 +79,6 @@ class MAACConfig:
         if self.num_turns > 1 and self.num_return_sequences != 1:
             raise ValueError(
                 "Multi-turn MAAC currently supports num_return_sequences == 1."
-            )
-        if self.num_turns > 1 and self.rollout_buffer_size % self.num_turns != 0:
-            raise ValueError(
-                "For multi-turn MAAC, rollout_buffer_size must be a multiple of num_turns "
-                "so per-turn metrics align (e.g., num_turns=2 => buffer_size even)."
             )
         critic_type = (self.critic_type or "v").lower()
         if critic_type not in ("v", "q"):
@@ -185,16 +177,27 @@ class MAACTrainer:
             weight_decay=self.args.weight_decay,
         )
 
-        self.global_step = 0
         self.rollout_buffers: List[List[RolloutSample]] = [
             [] for _ in range(self.args.num_agents)
         ]
 
         self.wandb_config = wandb_config
         self.wandb_initialized = False
-        self.data_step = 0
+        self.env_step = 0
         if wandb_config is not None:
             self._init_wandb()
+
+        # Verbosity from config (default True)
+        self.verbose = True
+        try:
+            if isinstance(self.wandb_config, dict):
+                sections = self.wandb_config.get("config_sections", {})
+                if isinstance(sections, dict):
+                    out = sections.get("output", {})
+                    if isinstance(out, dict) and "verbose" in out:
+                        self.verbose = bool(out.get("verbose"))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     # Initialisation helpers
@@ -765,30 +768,6 @@ class MAACTrainer:
     # ------------------------------------------------------------------ #
     # Advantage prep
     # ------------------------------------------------------------------ #
-    def _normalize_returns(self, rollouts: List[RolloutSample]) -> None:
-        returns = torch.stack([sample.returns for sample in rollouts]).float()
-        returns = returns.view(len(rollouts), -1)
-        flat = returns.view(-1)
-        if flat.numel() < 2:
-            return
-
-        mean = flat.mean()
-        std = flat.std(unbiased=False)
-        if std < self.args.reward_norm_eps:
-            return
-        normalized = (returns - mean) / std
-
-        for sample, norm_value in zip(rollouts, normalized):
-            norm_tensor = (
-                norm_value.view_as(sample.returns)
-                .to(sample.returns.dtype)
-                .detach()
-                .clone()
-            )
-            sample.returns = norm_tensor
-            sample.advantage = norm_tensor - sample.old_value.to(norm_tensor.dtype)
-            sample.normalized_advantage = None
-
     def _prepare_advantages(self, rollouts: List[RolloutSample]) -> None:
         if not rollouts:
             return
@@ -1060,12 +1039,22 @@ class MAACTrainer:
     # Training loop
     # ------------------------------------------------------------------ #
     def train(self) -> None:
-        dataloader = self.get_train_dataloader()
         total_epochs = self.args.num_train_epochs
 
         for epoch in range(total_epochs):
             epoch_metrics = defaultdict(list)
-            for batch_idx, batch in enumerate(dataloader):
+            dataloader = self.get_train_dataloader()
+            if not getattr(self, "verbose", True):
+                it = enumerate(
+                    tqdm(
+                        dataloader,
+                        total=len(dataloader),
+                        desc=f"Epoch {epoch + 1}/{total_epochs}",
+                    )
+                )
+            else:
+                it = enumerate(dataloader)
+            for batch_idx, batch in it:
                 if (
                     self.eval_dataset is not None
                     and self.args.eval_interval > 0
@@ -1080,7 +1069,8 @@ class MAACTrainer:
                         buffer.append(sample)
                         if len(buffer) >= self.args.rollout_buffer_size:
                             self._process_buffer(agent_idx, buffer, epoch_metrics)
-                    self.data_step += 1
+                    if self.args.num_agents > 0:
+                        self.env_step += len(rollouts) // self.args.num_agents
 
             for agent_idx, buffer in enumerate(self.rollout_buffers):
                 if not buffer:
@@ -1112,7 +1102,7 @@ class MAACTrainer:
             if epoch_log:
                 self._log_metrics(epoch_log)
 
-            if summary:
+            if summary and getattr(self, "verbose", True):
                 to_print = epoch_log if epoch_log else summary
                 print(f"Epoch {epoch + 1}/{total_epochs} metrics: {to_print}")
 
@@ -1129,7 +1119,7 @@ class MAACTrainer:
         if not metrics:
             return
         if self.wandb_initialized and wandb is not None:
-            wandb.log(metrics, step=self.data_step)
+            wandb.log(metrics, step=self.env_step)
 
     def _process_buffer(
         self,
