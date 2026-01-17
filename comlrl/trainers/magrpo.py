@@ -1628,6 +1628,7 @@ class MAGRPOTrainer:
             if self.tokenizer:
                 self.tokenizer.save_pretrained(agent_dir)
 
-        # Log model saving to wandb (don't call finish - let caller decide)
+        # Log final model saving to wandb
         if self.wandb_initialized and wandb.run is not None:
             wandb.log({"final_model_saved": output_dir})
+            wandb.finish()
