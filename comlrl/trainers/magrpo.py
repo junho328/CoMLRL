@@ -739,7 +739,7 @@ class MAGRPOTrainer:
             eval_metrics.update(extra_metrics)
 
         # Log evaluation metrics
-        if self.wandb_initialized:
+        if self.wandb_initialized and wandb.run is not None:
             wandb.log(eval_metrics, step=self.env_step)
 
         return eval_metrics
@@ -801,7 +801,7 @@ class MAGRPOTrainer:
                     self._process_buffer(agent_idx, buffer)
 
             # Log per-turn epoch averages inline (avoid custom system/* metrics)
-            if self.wandb_initialized:
+            if self.wandb_initialized and wandb.run is not None:
                 epoch_log: Dict[str, Any] = {}
                 n_turns = max(1, int(self.args.num_turns))
                 for turn_idx in range(n_turns):
@@ -1484,7 +1484,7 @@ class MAGRPOTrainer:
         for t_idx in sorted(turn_groups.keys()):
             samples = turn_groups[t_idx]
             self._update_from_samples(agent_idx, samples)
-            if self.wandb_initialized and samples:
+            if self.wandb_initialized and wandb.run is not None and samples:
                 batch_log: Dict[str, Any] = {}
                 prefix = f"turn_{t_idx + 1}/"
                 batch_log[prefix + "reward_mean"] = float(
@@ -1628,7 +1628,6 @@ class MAGRPOTrainer:
             if self.tokenizer:
                 self.tokenizer.save_pretrained(agent_dir)
 
-        # Log final model saving to wandb
-        if self.wandb_initialized:
+        # Log model saving to wandb (don't call finish - let caller decide)
+        if self.wandb_initialized and wandb.run is not None:
             wandb.log({"final_model_saved": output_dir})
-            wandb.finish()
