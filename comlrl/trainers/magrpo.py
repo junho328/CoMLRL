@@ -103,6 +103,20 @@ class MAGRPOConfig(TrainingArguments):
         },
     )
 
+    # Theory of Mind (ToM) settings
+    enable_tom: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable Theory of Mind: Agent 2 infers Agent 1's intent before generating."
+        },
+    )
+    tom_max_new_tokens: int = field(
+        default=128,
+        metadata={
+            "help": "Maximum tokens for ToM inference (Agent 2 inferring Agent 1's response)."
+        },
+    )
+
     # Evaluation
     eval_interval: int = field(
         default=16,
@@ -660,15 +674,46 @@ class MAGRPOTrainer:
                             "External transition must return a list or tuple of external prompts for each agent"
                         )
 
+            # If ToM is enabled, first infer what agent 0 would respond (for use by other agents)
+            inferred_agent0_intent = None
+            if getattr(self.args, "enable_tom", False) and self.num_agents > 1:
+                # Infer agent 0's response without gradients
+                inferred_intents = self._infer_other_agent_intent(
+                    target_agent_idx=0,
+                    batch_items=[batch_item],
+                    num_inferences=1,
+                    external_prompts=agent_external_prompts[0],
+                )
+                inferred_agent0_intent = inferred_intents[0] if inferred_intents else ""
+
             # Generate and extract one completion from each agent for evaluation
             for agent_idx in range(self.num_agents):
+                external_prompts_for_agent = agent_external_prompts[agent_idx]
+
+                # Apply ToM for agents after agent 0
+                if (
+                    getattr(self.args, "enable_tom", False)
+                    and agent_idx > 0
+                    and inferred_agent0_intent is not None
+                ):
+                    # Get the original prompt for this agent
+                    if external_prompts_for_agent is not None:
+                        original_prompt = external_prompts_for_agent
+                    else:
+                        original_prompt = self.formatters[agent_idx](batch_item)
+
+                    # Build ToM-augmented prompt
+                    external_prompts_for_agent = self._build_tom_augmented_prompt(
+                        original_prompt, inferred_agent0_intent, agent_idx
+                    )
+
                 agent_completions = self._generate_completions_with_external_prompts(
                     self.agents[agent_idx],
                     [batch_item],
                     agent_idx=agent_idx,
                     num_return_sequences=1,
                     max_new_tokens=self.args.max_new_tokens,
-                    external_prompts=agent_external_prompts[agent_idx],
+                    external_prompts=external_prompts_for_agent,
                     do_sample=True,
                 )
                 # Extract the completion directly
@@ -848,16 +893,50 @@ class MAGRPOTrainer:
             response_history_per_agent: Optional[List[List[str]]] = None,
         ):
             comps_per_agent = []
+
+            # If ToM is enabled, first infer what agent 0 would respond (for use by other agents)
+            inferred_agent0_intent = None
+            if getattr(self.args, "enable_tom", False) and self.num_agents > 1:
+                # Infer agent 0's response without gradients
+                inferred_intents = self._infer_other_agent_intent(
+                    target_agent_idx=0,
+                    batch_items=[batch_item],
+                    num_inferences=1,
+                    external_prompts=(
+                        prompts_per_agent[0] if prompts_per_agent else None
+                    ),
+                )
+                inferred_agent0_intent = inferred_intents[0] if inferred_intents else ""
+
             for agent_idx in range(self.num_agents):
+                external_prompts_for_agent = (
+                    prompts_per_agent[agent_idx] if prompts_per_agent else None
+                )
+
+                # Apply ToM for agents after agent 0
+                if (
+                    getattr(self.args, "enable_tom", False)
+                    and agent_idx > 0
+                    and inferred_agent0_intent is not None
+                ):
+                    # Get the original prompt for this agent
+                    if external_prompts_for_agent is not None:
+                        original_prompt = external_prompts_for_agent
+                    else:
+                        original_prompt = self.formatters[agent_idx](batch_item)
+
+                    # Build ToM-augmented prompt (inference is detached, no gradients)
+                    external_prompts_for_agent = self._build_tom_augmented_prompt(
+                        original_prompt, inferred_agent0_intent, agent_idx
+                    )
+
                 comps = self._generate_completions_with_external_prompts(
                     self.agents[agent_idx],
                     [batch_item],
                     agent_idx=agent_idx,
                     num_return_sequences=num_gens,
                     max_new_tokens=self.args.max_new_tokens,
-                    external_prompts=(
-                        prompts_per_agent[agent_idx] if prompts_per_agent else None
-                    ),
+                    external_prompts=external_prompts_for_agent,
                     **kwargs,
                 )
                 comps_per_agent.append(comps)
@@ -1324,10 +1403,11 @@ class MAGRPOTrainer:
         Generate completions with optional external prompts.
         This wraps the _generate_completions method to handle external transitions.
 
-        When num_turns=1 or external_prompts is None, behaves like _generate_completions.
+        When external_prompts is None, behaves like _generate_completions.
+        When external_prompts is provided (e.g., ToM-augmented prompt), uses it directly.
         """
-        # If single-turn or no external prompts, use standard method directly
-        if self.args.num_turns == 1 or external_prompts is None:
+        # If no external prompts, use standard method directly
+        if external_prompts is None:
             return self._generate_completions(
                 agent,
                 batch_items,
@@ -1382,6 +1462,89 @@ class MAGRPOTrainer:
         completions_data["prompts"] = prompts
 
         return completions_data
+
+    def _infer_other_agent_intent(
+        self,
+        target_agent_idx: int,
+        batch_items: List[Dict[str, Any]],
+        num_inferences: int = 1,
+        external_prompts: Optional[str] = None,
+    ) -> List[str]:
+        """
+        Infer what another agent would respond (Theory of Mind).
+        This is done WITHOUT gradients to prevent backpropagation through the inference.
+
+        Args:
+            target_agent_idx: Index of the agent whose response we want to infer
+            batch_items: List of data items (dictionaries from dataset)
+            num_inferences: Number of inference samples to generate
+            external_prompts: Optional external prompts for multi-turn scenarios
+
+        Returns:
+            List of inferred responses (one per inference sample)
+        """
+        target_agent = self.agents[target_agent_idx]
+
+        # Store original model state
+        training_mode = target_agent.training
+
+        target_agent.eval()
+
+        inferred_responses = []
+
+        try:
+            with torch.no_grad():
+                # Generate inference using the target agent's formatter
+                completions_data = self._generate_completions_with_external_prompts(
+                    target_agent,
+                    batch_items,
+                    agent_idx=target_agent_idx,
+                    num_return_sequences=num_inferences,
+                    max_new_tokens=self.args.tom_max_new_tokens,
+                    external_prompts=external_prompts,
+                    do_sample=True,
+                )
+
+                # Extract inferred completions
+                if completions_data["completions"] and completions_data["completions"][0]:
+                    inferred_responses = completions_data["completions"][0]
+                else:
+                    inferred_responses = [""] * num_inferences
+
+        finally:
+            # Restore original model state
+            target_agent.train(training_mode)
+
+        return inferred_responses
+
+    def _build_tom_augmented_prompt(
+        self,
+        original_prompt: str,
+        inferred_intent: str,
+        agent_idx: int,
+    ) -> str:
+        """
+        Build an augmented prompt for an agent that includes the inferred intent of another agent.
+
+        Args:
+            original_prompt: The original prompt for the agent
+            inferred_intent: The inferred response/intent from another agent
+            agent_idx: Index of the agent receiving this augmented prompt
+
+        Returns:
+            Augmented prompt string with inferred intent included
+        """
+        # Format the ToM-augmented prompt matching the style of existing formatters
+        augmented_prompt = f"""{original_prompt}
+
+PREDICTED AGENT 1 RESPONSE (background and motivation):
+{inferred_intent}
+
+ADDITIONAL INSTRUCTIONS:
+- Write as if you and Agent 1 are the same person composing one coherent introduction
+- Your response should complement Agent 1's content without any overlap
+"""
+        return augmented_prompt
 
     def _compute_rewards(
         self, prompts, completions_list, batch_items=None
