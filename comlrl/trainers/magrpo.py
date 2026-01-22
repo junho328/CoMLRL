@@ -394,8 +394,21 @@ class MAGRPOTrainer:
             reward_processor if reward_processor is not None else (lambda x: x)
         )
 
+    def _is_main_process(self) -> bool:
+        """Check if current process is the main process (rank 0) for distributed training."""
+        # Check LOCAL_RANK environment variable (set by accelerate/torchrun)
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        # Also check RANK for multi-node setups
+        rank = int(os.environ.get("RANK", 0))
+        return local_rank == 0 and rank == 0
+
     def _init_wandb(self):
         """Initialize Weights & Biases for tracking with multi-turn config."""
+        # Only initialize wandb on main process to avoid duplicate logging
+        if not self._is_main_process():
+            self.wandb_initialized = False
+            return
+
         if not self.wandb_initialized:
             if self.wandb_config is None:
                 self.wandb_config = {}
