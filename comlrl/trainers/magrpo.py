@@ -847,12 +847,25 @@ class MAGRPOTrainer:
                 # Process single batch item (batch_size=1 enforced)
                 batch_item = batch[0]
                 # Unified training step (returns-based, backward updates)
-                batch_loss, _batch_stats = self._train_step_returns(
+                batch_loss, batch_stats = self._train_step_returns(
                     batch_item,
                     epoch_turn_rewards,
                     epoch_turn_returns,
                     **kwargs,
                 )
+                
+                # Log training metrics per batch
+                if self.wandb_initialized and wandb.run is not None and batch_stats:
+                    train_log: Dict[str, Any] = {}
+                    for turn_idx, stats in batch_stats.items():
+                        prefix = f"train/turn_{turn_idx + 1}/"
+                        if "batch_mean_reward" in stats:
+                            train_log[prefix + "batch_reward"] = stats["batch_mean_reward"]
+                        if "batch_expected_return" in stats:
+                            train_log[prefix + "batch_return"] = stats["batch_expected_return"]
+                    if train_log:
+                        train_log["train/env_step"] = self.env_step
+                        wandb.log(train_log, step=self.env_step)
 
             for agent_idx, buffer in enumerate(self.rollout_buffers):
                 if buffer:
