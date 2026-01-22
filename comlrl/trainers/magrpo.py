@@ -224,12 +224,12 @@ class MAGRPOTrainer:
             if isinstance(model, str):
                 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-                self.agents = [
-                    AutoModelForCausalLM.from_pretrained(
-                        model, **self.model_config.get("model_kwargs", {})
-                    )
-                    for _ in range(num_agents)
-                ]
+                # Create a single shared model for all agents
+                shared_model = AutoModelForCausalLM.from_pretrained(
+                    model, **self.model_config.get("model_kwargs", {})
+                )
+                # All agents reference the same model instance
+                self.agents = [shared_model for _ in range(num_agents)]
                 self.model_name = model
 
                 if tokenizer is None:
@@ -275,14 +275,14 @@ class MAGRPOTrainer:
         self.eval_aggregator = eval_aggregator
         self.external_transition = external_transition
 
-        self.optimizers = [
-            torch.optim.AdamW(
-                agent.parameters(),
-                lr=self.args.learning_rate,
-                weight_decay=self.args.weight_decay,
-            )
-            for agent in self.agents
-        ]
+        # Create a single shared optimizer for the shared model
+        # All agents use the same optimizer since they share the same model
+        shared_optimizer = torch.optim.AdamW(
+            self.agents[0].parameters(),
+            lr=self.args.learning_rate,
+            weight_decay=self.args.weight_decay,
+        )
+        self.optimizers = [shared_optimizer for _ in range(self.num_agents)]
 
         self.wandb_config = wandb_config
         self.wandb_initialized = False
