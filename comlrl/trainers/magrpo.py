@@ -275,14 +275,32 @@ class MAGRPOTrainer:
         self.eval_aggregator = eval_aggregator
         self.external_transition = external_transition
 
-        self.optimizers = [
-            torch.optim.AdamW(
-                agent.parameters(),
+        # Detect shared parameters: all agents are the same model instance
+        unique_agent_ids = set(id(agent) for agent in self.agents)
+        self._shared_params = len(unique_agent_ids) == 1 and self.num_agents > 1
+
+        if self._shared_params:
+            # Single optimizer for shared model
+            self._single_optimizer = torch.optim.AdamW(
+                self.agents[0].parameters(),
                 lr=self.args.learning_rate,
                 weight_decay=self.args.weight_decay,
             )
-            for agent in self.agents
-        ]
+            # Wrapper list so indexing still works, all point to same optimizer
+            self.optimizers = [self._single_optimizer] * self.num_agents
+            # Track gradient accumulation across agents
+            self._shared_grad_step_counter = 0
+            print(f"[SharedParams] Detected shared model across {self.num_agents} agents")
+        else:
+            # Standard: one optimizer per agent
+            self.optimizers = [
+                torch.optim.AdamW(
+                    agent.parameters(),
+                    lr=self.args.learning_rate,
+                    weight_decay=self.args.weight_decay,
+                )
+                for agent in self.agents
+            ]
 
         self.wandb_config = wandb_config
         self.wandb_initialized = False
@@ -1501,16 +1519,40 @@ class MAGRPOTrainer:
         if not samples:
             return
         random.shuffle(samples)
-        self.optimizers[agent_idx].zero_grad()
-        scale = 1.0 / len(samples)
-        for sample in samples:
-            loss = self._compute_loss_with_gradients(
-                self.agents[agent_idx],
-                sample.completions_data,
-                sample.returns,
-            )
-            (loss * scale).backward()
-        self.optimizers[agent_idx].step()
+
+        if self._shared_params:
+            # Shared parameters: accumulate gradients, step only after last agent
+            if agent_idx == 0:
+                # First agent: zero gradients
+                self._single_optimizer.zero_grad()
+                self._shared_grad_step_counter = 0
+
+            scale = 1.0 / (len(samples) * self.num_agents)  # Scale for accumulation
+            for sample in samples:
+                loss = self._compute_loss_with_gradients(
+                    self.agents[agent_idx],
+                    sample.completions_data,
+                    sample.returns,
+                )
+                (loss * scale).backward()
+
+            self._shared_grad_step_counter += 1
+            if self._shared_grad_step_counter >= self.num_agents:
+                # All agents contributed: perform update
+                self._single_optimizer.step()
+                self._shared_grad_step_counter = 0
+        else:
+            # Standard: each agent has independent optimizer
+            self.optimizers[agent_idx].zero_grad()
+            scale = 1.0 / len(samples)
+            for sample in samples:
+                loss = self._compute_loss_with_gradients(
+                    self.agents[agent_idx],
+                    sample.completions_data,
+                    sample.returns,
+                )
+                (loss * scale).backward()
+            self.optimizers[agent_idx].step()
 
     def _compute_loss_with_gradients(self, agent, completions_data, returns):
         """
@@ -1619,14 +1661,22 @@ class MAGRPOTrainer:
         """
         os.makedirs(output_dir, exist_ok=True)
 
-        for agent_idx, agent in enumerate(self.agents):
-            agent_dir = f"{output_dir}/agent_{agent_idx}"
+        if self._shared_params:
+            # Shared parameters: save once under shared_model directory
+            agent_dir = f"{output_dir}/shared_model"
             os.makedirs(agent_dir, exist_ok=True)
-
-            agent.save_pretrained(agent_dir)
-
+            self.agents[0].save_pretrained(agent_dir)
             if self.tokenizer:
                 self.tokenizer.save_pretrained(agent_dir)
+            print(f"[SharedParams] Saved shared model to {agent_dir}")
+        else:
+            # Standard: save each agent separately
+            for agent_idx, agent in enumerate(self.agents):
+                agent_dir = f"{output_dir}/agent_{agent_idx}"
+                os.makedirs(agent_dir, exist_ok=True)
+                agent.save_pretrained(agent_dir)
+                if self.tokenizer:
+                    self.tokenizer.save_pretrained(agent_dir)
 
         # Log final model saving to wandb
         if self.wandb_initialized and wandb.run is not None:
