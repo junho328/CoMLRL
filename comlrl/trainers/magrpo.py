@@ -1560,8 +1560,26 @@ class MAGRPOTrainer:
         Returns:
             Augmented prompt string with inferred intent included
         """
-        # Format the ToM-augmented prompt matching the style of existing formatters
-        augmented_prompt = f"""{original_prompt}
+        # Check dataset type and use appropriate prompt template
+        dataset_type = getattr(self, "dataset_type", None) or ""
+        dataset_type_lower = dataset_type.lower() if dataset_type else ""
+
+        # Code generation tasks (humaneval, coophumaneval, mbpp)
+        if dataset_type_lower in ["humaneval", "coophumaneval", "mbpp"]:
+            augmented_prompt = f"""{original_prompt}
+
+PREDICTED HELPER FUNCTION from Agent 1:
+{inferred_intent}
+
+ADDITIONAL INSTRUCTIONS:
+- The above is your prediction of what the auxiliary function (aux) might look like
+- Use this predicted helper function to inform your implementation of the main function
+- You may call aux() if it would be helpful for your solution
+- Focus on implementing the main function correctly
+"""
+        else:
+            # Writing tasks (arxiv, tldr) - original behavior
+            augmented_prompt = f"""{original_prompt}
 
 PREDICTED AGENT 1 RESPONSE (background and motivation):
 {inferred_intent}
