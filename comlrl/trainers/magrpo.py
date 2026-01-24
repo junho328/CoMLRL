@@ -239,8 +239,13 @@ class MAGRPOTrainer:
                 from transformers import AutoModelForCausalLM, AutoTokenizer
 
                 # Create a single shared model for all agents
+                # Enable Flash Attention 2 if not explicitly disabled in config
+                model_load_kwargs = dict(self.model_config.get("model_kwargs", {}))
+                if "attn_implementation" not in model_load_kwargs:
+                    model_load_kwargs["attn_implementation"] = "flash_attention_2"
+                
                 shared_model = AutoModelForCausalLM.from_pretrained(
-                    model, **self.model_config.get("model_kwargs", {})
+                    model, **model_load_kwargs
                 )
                 # All agents reference the same model instance
                 self.agents = [shared_model for _ in range(num_agents)]
