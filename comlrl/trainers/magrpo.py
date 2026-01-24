@@ -1174,10 +1174,20 @@ class MAGRPOTrainer:
         tokenizer = self.tokenizers[agent_idx]
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        # Default to left padding for causal LM generation if not set
+        if not hasattr(tokenizer, 'padding_side') or tokenizer.padding_side is None:
+            tokenizer.padding_side = 'left'
 
-        # Tokenize prompts
+        # Determine max_length for tokenization
+        # Use model's max_position_embeddings or tokenizer's model_max_length
+        # tokenizer_max_length = getattr(tokenizer, 'max_length', None)
+        # if tokenizer_max_length is None or tokenizer_max_length > 1e9:
+        #     # Fallback to a reasonable default if not set or unreasonably large
+        tokenizer_max_length = 2048
+
+        # Tokenize prompts with explicit max_length
         prompt_encodings = tokenizer(
-            prompts, padding=True, truncation=True, return_tensors="pt"
+            prompts, padding=True, truncation=True, max_length=tokenizer_max_length, return_tensors="pt"
         ).to(device)
 
         prompt_input_ids = prompt_encodings.input_ids
