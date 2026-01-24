@@ -147,7 +147,7 @@ class MAGRPOTrainer:
         args: The training arguments
         train_dataset: The training dataset
         eval_dataset: The evaluation dataset
-        tokenizer: The tokenizer
+        tokenizers: List of tokenizers (one per agent for heterogeneous models)
         wandb_config: Configuration for Weights & Biases logging
         model_config: Model configuration dict
         eval_logger: Evaluation logger function
@@ -162,7 +162,7 @@ class MAGRPOTrainer:
         model: Optional[Union[str, PreTrainedModel]] = None,
         agents: Optional[List[PreTrainedModel]] = None,
         num_agents: int = 2,
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        tokenizers: Optional[List[PreTrainedTokenizerBase]] = None,
         model_config: Optional[Dict[str, Any]] = None,
         # Data
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -232,13 +232,15 @@ class MAGRPOTrainer:
                 ]
                 self.model_name = model
 
-                if tokenizer is None:
-                    self.tokenizer = AutoTokenizer.from_pretrained(
+                if tokenizers is None:
+                    # Create same tokenizer for all agents (homogeneous mode)
+                    tok = AutoTokenizer.from_pretrained(
                         model, **self.model_config.get("tokenizer_kwargs", {})
                     )
                     special_tokens = self.model_config.get("special_tokens", {})
                     if special_tokens:
-                        self.tokenizer.add_special_tokens(special_tokens)
+                        tok.add_special_tokens(special_tokens)
+                    self.tokenizers = [tok] * num_agents
             else:
                 raise ValueError(
                     "Model should be a string to create homogeneous agents"
@@ -268,8 +270,18 @@ class MAGRPOTrainer:
 
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
-        if tokenizer is not None:
-            self.tokenizer = tokenizer
+        
+        # Store tokenizers (one per agent for heterogeneous models)
+        if tokenizers is not None:
+            if len(tokenizers) != self.num_agents:
+                raise ValueError(
+                    f"Number of tokenizers ({len(tokenizers)}) must match "
+                    f"num_agents ({self.num_agents})"
+                )
+            self.tokenizers = tokenizers
+        else:
+            # Fallback: will be set later if model string is provided
+            self.tokenizers = None
 
         self.eval_logger = eval_logger
         self.eval_aggregator = eval_aggregator
@@ -1156,14 +1168,15 @@ class MAGRPOTrainer:
             prompts = [format_func(item) for item in batch_items]
         # batch_size is always 1 due to enforced constraint
 
-        # Ensure tokenizer exists
-        if self.tokenizer is None:
-            raise ValueError("Tokenizer is required for generating completions")
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Get tokenizer for this agent (heterogeneous models support)
+        if self.tokenizers is None or agent_idx >= len(self.tokenizers):
+            raise ValueError(f"Tokenizer not found for agent {agent_idx}")
+        tokenizer = self.tokenizers[agent_idx]
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         # Tokenize prompts
-        prompt_encodings = self.tokenizer(
+        prompt_encodings = tokenizer(
             prompts, padding=True, truncation=True, return_tensors="pt"
         ).to(device)
 
@@ -1230,7 +1243,7 @@ class MAGRPOTrainer:
                 "pad_token_id" not in generation_kwargs
                 or generation_kwargs["pad_token_id"] is None
             ):
-                generation_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+                generation_kwargs["pad_token_id"] = tokenizer.pad_token_id
 
             # Add any additional user-provided kwargs (these override model defaults)
             generation_kwargs.update(kwargs)
@@ -1251,7 +1264,7 @@ class MAGRPOTrainer:
         # to properly extract just the completion part
         prompt_len = prompt_input_ids[0].shape[0]
         # Find where padding token starts if any
-        pad_positions = (prompt_input_ids[0] == self.tokenizer.pad_token_id).nonzero()
+        pad_positions = (prompt_input_ids[0] == tokenizer.pad_token_id).nonzero()
         if pad_positions.shape[0] > 0:
             prompt_len = pad_positions[
                 0
@@ -1277,7 +1290,7 @@ class MAGRPOTrainer:
             batch_completion_tokens.append(completion_tokens)
 
             # Decode to text
-            completion_text = self.tokenizer.decode(
+            completion_text = tokenizer.decode(
                 completion_tokens, skip_special_tokens=True
             )
             batch_completions.append(completion_text)
@@ -1506,24 +1519,28 @@ class MAGRPOTrainer:
         for sample in samples:
             loss = self._compute_loss_with_gradients(
                 self.agents[agent_idx],
+                agent_idx,
                 sample.completions_data,
                 sample.returns,
             )
             (loss * scale).backward()
         self.optimizers[agent_idx].step()
 
-    def _compute_loss_with_gradients(self, agent, completions_data, returns):
+    def _compute_loss_with_gradients(self, agent, agent_idx, completions_data, returns):
         """
         Compute loss with proper gradient tracking by performing a new forward pass.
 
         Args:
             agent: The agent model
+            agent_idx: Index of the agent (for accessing the correct tokenizer)
             completions_data: The completions data from _generate_completions
             returns: The returns for each completion (not immediate rewards)
 
         Returns:
             torch.Tensor: The computed loss with gradients attached
         """
+        # Get tokenizer for this agent (available for future use if needed)
+        tokenizer = self.tokenizers[agent_idx] if self.tokenizers else None
         device = agent.device
 
         # Make sure we have the correct number of rewards
@@ -1612,7 +1629,7 @@ class MAGRPOTrainer:
 
     def save_model(self, output_dir):
         """
-        Save the final trained models.
+        Save the final trained models and their corresponding tokenizers.
 
         Args:
             output_dir: Directory to save the models to
@@ -1625,8 +1642,9 @@ class MAGRPOTrainer:
 
             agent.save_pretrained(agent_dir)
 
-            if self.tokenizer:
-                self.tokenizer.save_pretrained(agent_dir)
+            # Save the agent-specific tokenizer (heterogeneous models support)
+            if self.tokenizers and agent_idx < len(self.tokenizers):
+                self.tokenizers[agent_idx].save_pretrained(agent_dir)
 
         # Log final model saving to wandb
         if self.wandb_initialized and wandb.run is not None:
