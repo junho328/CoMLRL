@@ -223,10 +223,15 @@ class MAGRPOTrainer:
             self.num_agents = num_agents
             if isinstance(model, str):
                 from transformers import AutoModelForCausalLM, AutoTokenizer
+                
+                # Enable Flash Attention 2 if not explicitly disabled in config
+                model_load_kwargs = dict(model_config.model_kwargs)
+                if "attn_implementation" not in model_load_kwargs:
+                    model_load_kwargs["attn_implementation"] = "flash_attention_2"
 
                 self.agents = [
                     AutoModelForCausalLM.from_pretrained(
-                        model, **self.model_config.get("model_kwargs", {})
+                        model, **model_load_kwargs
                     )
                     for _ in range(num_agents)
                 ]
