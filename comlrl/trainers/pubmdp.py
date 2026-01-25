@@ -1554,6 +1554,11 @@ Write a specification for the main function that:
                 if self.rank == 0 and self.args.eval_interval > 0 and batch_idx % self.args.eval_interval == 0:
                     self.evaluate(num_eval_samples=self.args.eval_num_samples)
                 
+                # Synchronize all ranks after evaluation to prevent NCCL timeout
+                # (Rank 0 may take longer due to evaluation while other ranks wait)
+                if self.is_distributed and self.args.eval_interval > 0 and batch_idx % self.args.eval_interval == 0:
+                    dist.barrier()
+                
                 # Train step with batch
                 loss, metrics = self._train_step_batch(batch)
                 
