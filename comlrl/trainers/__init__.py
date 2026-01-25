@@ -4,3 +4,4 @@ from .mareinforce import MAREINFORCEConfig, MAREINFORCETrainer
 from .maremax import MAReMaxTrainer
 from .marloo import MARLOOTrainer
 from .maac import MAACConfig, MAACTrainer
+from .pubmdp import PuBMDPConfig, PuBMDPTrainer
