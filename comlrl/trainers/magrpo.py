@@ -107,6 +107,10 @@ class MAGRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Top-k for sampling (set to None to disable)."},
     )
+    repetition_penalty: Optional[float] = field(
+        default=None,
+        metadata={"help": "Repetition penalty for generation (set to None to disable, >1.0 to penalize)."},
+    )
 
     # Joint mode for multi-agent reward computation
     joint_mode: str = field(
@@ -573,15 +577,25 @@ class MAGRPOTrainer:
         )
 
     def get_eval_dataloader(self) -> Optional[DataLoader]:
-        """Returns the evaluation DataLoader."""
+        """Returns the evaluation DataLoader with distributed sampler if needed."""
         if self.eval_dataset is None:
             return None
+
+        sampler = None
+        if self.distributed:
+            sampler = DistributedSampler(
+                self.eval_dataset,
+                num_replicas=self.world_size,
+                rank=self.global_rank,
+                shuffle=False,  # No shuffling for eval
+            )
 
         return DataLoader(
             self.eval_dataset,
             batch_size=self.args.per_device_train_batch_size,
             collate_fn=lambda examples: examples,
             shuffle=False,
+            sampler=sampler,
             drop_last=False,
             num_workers=self.args.dataloader_num_workers,
         )
@@ -641,6 +655,7 @@ class MAGRPOTrainer:
             }
 
             top_k = getattr(self.args, "top_k", None)
+            repetition_penalty = getattr(self.args, "repetition_penalty", None)
             if do_sample and num_return_sequences > 1:
                 generation_kwargs.update({
                     "do_sample": True,
@@ -651,6 +666,8 @@ class MAGRPOTrainer:
                 })
                 if top_k is not None:
                     generation_kwargs["top_k"] = top_k
+                if repetition_penalty is not None:
+                    generation_kwargs["repetition_penalty"] = repetition_penalty
             else:
                 generation_kwargs.update({
                     "do_sample": do_sample,
@@ -684,12 +701,10 @@ class MAGRPOTrainer:
             agent_sequences = all_sequences[start_idx:end_idx]
             agent_prompt_ids = prompt_input_ids[agent_idx]
 
-            # Find actual prompt length
-            pad_positions = (agent_prompt_ids == self.tokenizer.pad_token_id).nonzero()
-            if pad_positions.shape[0] > 0:
-                prompt_len = pad_positions[0].item()
-            else:
-                prompt_len = agent_prompt_ids.shape[0]
+            # prompt_len is the total input length (including any padding)
+            # model.generate() appends new tokens AFTER the full input sequence
+            # So we need to skip the entire input to get just the generated completion
+            prompt_len = agent_prompt_ids.shape[0]
 
             # Extract completions
             completions = []
@@ -921,10 +936,18 @@ class MAGRPOTrainer:
                 )
 
             for batch_idx, batch in iterator:
-                # Periodic evaluation (main process only)
+                # Periodic evaluation (all processes to avoid DDP sync issues)
                 if self.args.eval_interval > 0 and batch_idx % self.args.eval_interval == 0:
-                    if self.is_main_process:
-                        self.evaluate(num_eval_samples=self.args.eval_num_samples)
+                    # Synchronize before eval to ensure all processes are at the same point
+                    if self.distributed:
+                        dist.barrier()
+                    
+                    # All processes run eval (logging only on main)
+                    self.evaluate(num_eval_samples=self.args.eval_num_samples)
+                    
+                    # Synchronize after eval before resuming training
+                    if self.distributed:
+                        dist.barrier()
 
                 # Process single batch item
                 batch_item = batch[0]
@@ -1179,32 +1202,61 @@ class MAGRPOTrainer:
         return total_loss
 
     def evaluate(self, num_eval_samples: int = 8) -> Dict[str, float]:
-        """Run evaluation on the eval dataset."""
+        """Run evaluation on the eval dataset with distributed support.
+        
+        In distributed mode, each GPU processes different eval samples and
+        results are gathered on the main process for logging.
+        """
         if self.eval_dataset is None:
             return {}
 
-        all_agent_completions = [[] for _ in range(self.num_agents)]
-        all_test_cases = []
-        all_entry_points = []
-        all_prompts = []
-        all_rewards = []
+        # Local results for this process
+        local_agent_completions = [[] for _ in range(self.num_agents)]
+        local_test_cases = []
+        local_entry_points = []
+        local_prompts = []
+        local_rewards = []
 
         eval_dataloader = self.get_eval_dataloader()
+        
+        # In distributed mode, calculate samples per GPU
+        # Each GPU processes num_eval_samples // world_size samples
+        if self.distributed:
+            samples_per_gpu = max(1, num_eval_samples // self.world_size)
+        else:
+            samples_per_gpu = num_eval_samples
 
         with torch.no_grad():
             for eval_idx, batch in enumerate(eval_dataloader):
-                if eval_idx >= num_eval_samples:
+                if eval_idx >= samples_per_gpu:
                     break
 
                 for batch_item in batch:
                     sample_rewards = self._evaluate_sample(
                         batch_item,
-                        all_agent_completions,
-                        all_test_cases,
-                        all_entry_points,
-                        all_prompts,
+                        local_agent_completions,
+                        local_test_cases,
+                        local_entry_points,
+                        local_prompts,
                     )
-                    all_rewards.extend(sample_rewards)
+                    local_rewards.extend(sample_rewards)
+
+        # Gather results from all processes in distributed mode
+        if self.distributed:
+            all_agent_completions, all_test_cases, all_entry_points, all_prompts, all_rewards = \
+                self._gather_eval_results(
+                    local_agent_completions,
+                    local_test_cases,
+                    local_entry_points,
+                    local_prompts,
+                    local_rewards,
+                )
+        else:
+            all_agent_completions = local_agent_completions
+            all_test_cases = local_test_cases
+            all_entry_points = local_entry_points
+            all_prompts = local_prompts
+            all_rewards = local_rewards
 
         eval_metrics = self._log_eval_metrics(
             all_agent_completions,
@@ -1214,6 +1266,52 @@ class MAGRPOTrainer:
             all_rewards,
         )
         return eval_metrics
+
+    def _gather_eval_results(
+        self,
+        local_agent_completions: List[List],
+        local_test_cases: List,
+        local_entry_points: List,
+        local_prompts: List,
+        local_rewards: List[float],
+    ) -> Tuple[List[List], List, List, List, List[float]]:
+        """Gather evaluation results from all processes in distributed mode.
+        
+        Returns aggregated results from all GPUs.
+        """
+        # Prepare local data as a single object for gathering
+        local_data = {
+            "agent_completions": local_agent_completions,
+            "test_cases": local_test_cases,
+            "entry_points": local_entry_points,
+            "prompts": local_prompts,
+            "rewards": local_rewards,
+        }
+        
+        # Gather from all processes
+        gathered_data = [None] * self.world_size
+        dist.all_gather_object(gathered_data, local_data)
+        
+        # Aggregate results from all processes
+        all_agent_completions = [[] for _ in range(self.num_agents)]
+        all_test_cases = []
+        all_entry_points = []
+        all_prompts = []
+        all_rewards = []
+        
+        for data in gathered_data:
+            if data is None:
+                continue
+            # Merge agent completions
+            for agent_idx in range(self.num_agents):
+                if agent_idx < len(data["agent_completions"]):
+                    all_agent_completions[agent_idx].extend(data["agent_completions"][agent_idx])
+            all_test_cases.extend(data["test_cases"])
+            all_entry_points.extend(data["entry_points"])
+            all_prompts.extend(data["prompts"])
+            all_rewards.extend(data["rewards"])
+        
+        return all_agent_completions, all_test_cases, all_entry_points, all_prompts, all_rewards
 
     def _evaluate_sample(
         self,
@@ -1226,7 +1324,11 @@ class MAGRPOTrainer:
         """Evaluate a single sample."""
         all_test_cases.append(batch_item.get("test", ""))
         all_entry_points.append(batch_item.get("entry_point", ""))
-        all_prompts.append(batch_item.get("prompt", ""))
+        # For BigCodeBench, use code_prompt instead of prompt (contains imports)
+        if self.dataset_type and self.dataset_type.lower() in ["bigcodebench", "bcb"]:
+            all_prompts.append(batch_item.get("code_prompt", ""))
+        else:
+            all_prompts.append(batch_item.get("prompt", ""))
 
         comps_per_agent = self._batch_generate_all_agents(
             batch_item,
@@ -1254,15 +1356,17 @@ class MAGRPOTrainer:
         all_prompts: List,
         all_rewards: List[float],
     ) -> Dict[str, float]:
-        """Log evaluation metrics."""
+        """Log evaluation metrics. Only main process logs to wandb."""
         eval_metrics = {}
 
         if all_rewards:
             eval_metrics["eval/reward_mean"] = float(np.mean(all_rewards))
             eval_metrics["eval/reward_std"] = float(np.std(all_rewards))
 
+        # Only run eval_logger on main process to avoid duplicate verbose output
         if (
-            self.eval_logger is not None
+            self.is_main_process
+            and self.eval_logger is not None
             and self.eval_aggregator is not None
             and all_agent_completions
             and all(agent_comps for agent_comps in all_agent_completions)
