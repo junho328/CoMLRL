@@ -1,5 +1,6 @@
 import inspect
 import itertools
+import math
 import os
 import random
 from dataclasses import dataclass, field
@@ -180,6 +181,44 @@ class MAGRPOConfig(TrainingArguments):
         metadata={"help": "Enable distributed training across multiple GPUs."},
     )
 
+    # Separate adapters for multi-agent (mental simulation mode)
+    separate_agent_adapters: bool = field(
+        default=False,
+        metadata={"help": "Use separate LoRA adapters for each agent."},
+    )
+
+    # Mental simulation configuration for Agent 2
+    enable_mental_simulation: bool = field(
+        default=False,
+        metadata={"help": "Enable two-stage generation for Agent 2 with mental simulation."},
+    )
+    inference_max_tokens: int = field(
+        default=512,
+        metadata={"help": "Maximum tokens for Agent 2's inference (mental simulation)."},
+    )
+
+    # Similarity reward configuration
+    similarity_weight_schedule: str = field(
+        default="linear",
+        metadata={"help": "Schedule for similarity weight: 'linear', 'cosine', or 'step'."},
+    )
+    similarity_weight_start: float = field(
+        default=0.0,
+        metadata={"help": "Starting value for similarity weight lambda(t)."},
+    )
+    similarity_weight_end: float = field(
+        default=0.5,
+        metadata={"help": "Ending value for similarity weight lambda(t)."},
+    )
+    similarity_weight_warmup_steps: int = field(
+        default=20,
+        metadata={"help": "Number of warmup steps for similarity weight schedule."},
+    )
+    code_reward_threshold: float = field(
+        default=1.5,
+        metadata={"help": "Minimum code reward threshold to enable similarity reward (gating)."},
+    )
+
 
 @dataclass
 class RolloutSample:
@@ -191,6 +230,10 @@ class RolloutSample:
     mean_reward: float
     mean_return: float
     env_step: int
+    # Differential reward fields for mental simulation mode
+    inference_returns: Optional[List[float]] = None  # Returns for inference tokens
+    main_returns: Optional[List[float]] = None  # Returns for main function tokens
+    inference_token_boundaries: Optional[List[int]] = None  # Token index where inference ends
 
 
 class MAGRPOTrainer:
@@ -243,18 +286,27 @@ class MAGRPOTrainer:
         self._setup_reward_function(reward_func, reward_processor)
 
         # Setup model with optional LoRA
+        # For separate_agent_adapters mode: create separate models for each agent
+        # Otherwise: use a single shared model
+        self.agent_models = None  # Will be set if using separate models
+        
         if agents is not None:
             self.num_agents = len(agents)
             self.shared_model = agents[0]
             self.model_name = self._extract_model_name(agents[0])
-            # Apply LoRA if enabled
-            if self.args.use_lora:
+            
+            if self.args.separate_agent_adapters and self.args.use_lora:
+                # Create separate models with their own LoRA adapters
+                self.agent_models = self._setup_separate_agent_models(agents)
+                # shared_model points to agent 0's model for compatibility
+                self.shared_model = self.agent_models[0]
+            elif self.args.use_lora:
                 self.shared_model = self._apply_lora(self.shared_model)
+            
             self.agents = [self.shared_model for _ in range(self.num_agents)]
         else:
             self.num_agents = num_agents
             if isinstance(model, str):
-                self.shared_model = self._load_model(model)
                 self.model_name = model
 
                 if tokenizer is None:
@@ -264,6 +316,13 @@ class MAGRPOTrainer:
                     special_tokens = self.model_config.get("special_tokens", {})
                     if special_tokens:
                         self.tokenizer.add_special_tokens(special_tokens)
+
+                if self.args.separate_agent_adapters and self.args.use_lora:
+                    # Load separate pretrained models for each agent
+                    self.agent_models = self._load_separate_agent_models(model)
+                    self.shared_model = self.agent_models[0]
+                else:
+                    self.shared_model = self._load_model(model)
 
                 self.agents = [self.shared_model for _ in range(num_agents)]
             else:
@@ -288,12 +347,30 @@ class MAGRPOTrainer:
         self.eval_logger = eval_logger
         self.eval_aggregator = eval_aggregator
 
-        # Setup optimizer
-        self.optimizer = torch.optim.AdamW(
-            self.shared_model.parameters(),
-            lr=self.args.learning_rate,
-            weight_decay=self.args.weight_decay,
-        )
+        # Setup optimizer(s)
+        if self.agent_models is not None:
+            # Separate optimizers for each agent's model
+            self.agent_optimizers = []
+            for i, agent_model in enumerate(self.agent_models):
+                optimizer_i = torch.optim.AdamW(
+                    [p for p in agent_model.parameters() if p.requires_grad],
+                    lr=self.args.learning_rate,
+                    weight_decay=self.args.weight_decay,
+                )
+                self.agent_optimizers.append(optimizer_i)
+            # Keep reference to first optimizer for compatibility
+            self.optimizer = self.agent_optimizers[0]
+        else:
+            # Single optimizer for shared model
+            self.optimizer = torch.optim.AdamW(
+                self.shared_model.parameters(),
+                lr=self.args.learning_rate,
+                weight_decay=self.args.weight_decay,
+            )
+            self.agent_optimizers = None
+
+        # Initialize similarity reward function (will be set from train script if mental simulation enabled)
+        self.similarity_reward_func = None
 
         self.wandb_config = wandb_config
         self.wandb_initialized = False
@@ -352,7 +429,10 @@ class MAGRPOTrainer:
 
         # Apply LoRA if enabled
         if self.args.use_lora:
-            model = self._apply_lora(model)
+            if self.args.separate_agent_adapters:
+                model = self._setup_separate_adapters(model)
+            else:
+                model = self._apply_lora(model)
 
         return model
 
@@ -395,6 +475,144 @@ class MAGRPOTrainer:
             model.print_trainable_parameters()
 
         return model
+
+    def _load_separate_agent_models(self, model_path: str) -> List[PreTrainedModel]:
+        """
+        Load separate pretrained models for each agent, each with its own LoRA adapter.
+        
+        This creates completely independent models (not adapter switching) so each agent
+        has its own model instance and trainable parameters.
+        """
+        if not PEFT_AVAILABLE:
+            raise ImportError(
+                "PEFT library is required for separate agent models. Install with: pip install peft"
+            )
+
+        model_load_kwargs = dict(self.model_config.get("model_kwargs", {}))
+        if "attn_implementation" not in model_load_kwargs:
+            model_load_kwargs["attn_implementation"] = "flash_attention_2"
+
+        target_modules = self.args.lora_target_modules
+
+        agent_models = []
+        
+        if self.is_main_process:
+            print(f"Loading {self.num_agents} separate models for mental simulation")
+            print(f"LoRA config: r={self.args.lora_r}, alpha={self.args.lora_alpha}")
+
+        for i in range(self.num_agents):
+            if self.is_main_process:
+                print(f"Loading model for Agent {i}...")
+            
+            # Load a fresh pretrained model for each agent
+            base_model = AutoModelForCausalLM.from_pretrained(model_path, **model_load_kwargs)
+            
+            # Auto-detect target modules if not specified
+            if target_modules is None:
+                target_modules = self._get_default_lora_targets(base_model)
+            
+            # Create LoRA config for this agent
+            lora_config = LoraConfig(
+                r=self.args.lora_r,
+                lora_alpha=self.args.lora_alpha,
+                lora_dropout=self.args.lora_dropout,
+                target_modules=target_modules,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            
+            # Apply LoRA adapter
+            model_with_lora = get_peft_model(base_model, lora_config)
+            
+            if self.is_main_process:
+                print(f"Agent {i} model ready")
+                model_with_lora.print_trainable_parameters()
+            
+            agent_models.append(model_with_lora)
+
+        if self.is_main_process:
+            print(f"All {self.num_agents} agent models loaded successfully")
+
+        return agent_models
+
+    def _setup_separate_agent_models(self, agents: List[PreTrainedModel]) -> List[PreTrainedModel]:
+        """
+        Setup separate LoRA adapters on provided agent models.
+        
+        Each agent gets its own LoRA adapter applied to its model instance.
+        """
+        if not PEFT_AVAILABLE:
+            raise ImportError(
+                "PEFT library is required for separate agent models. Install with: pip install peft"
+            )
+
+        target_modules = self.args.lora_target_modules
+        
+        if self.is_main_process:
+            print(f"Setting up {len(agents)} separate agent models with LoRA")
+            print(f"LoRA config: r={self.args.lora_r}, alpha={self.args.lora_alpha}")
+
+        agent_models = []
+        
+        for i, agent_model in enumerate(agents):
+            # Auto-detect target modules if not specified
+            if target_modules is None:
+                target_modules = self._get_default_lora_targets(agent_model)
+            
+            # Create LoRA config for this agent
+            lora_config = LoraConfig(
+                r=self.args.lora_r,
+                lora_alpha=self.args.lora_alpha,
+                lora_dropout=self.args.lora_dropout,
+                target_modules=target_modules,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
+            
+            # Apply LoRA adapter
+            model_with_lora = get_peft_model(agent_model, lora_config)
+            
+            if self.is_main_process:
+                print(f"Agent {i} model ready")
+                model_with_lora.print_trainable_parameters()
+            
+            agent_models.append(model_with_lora)
+
+        return agent_models
+
+    def _get_agent_model(self, agent_idx: int) -> PreTrainedModel:
+        """Get the model for a specific agent."""
+        if self.agent_models is not None:
+            return self.agent_models[agent_idx]
+        return self.shared_model
+
+    def _get_similarity_weight(self, step: int) -> float:
+        """Get the current similarity weight lambda(t) based on schedule."""
+        schedule = self.args.similarity_weight_schedule
+        start = self.args.similarity_weight_start
+        end = self.args.similarity_weight_end
+        warmup_steps = self.args.similarity_weight_warmup_steps
+
+        if warmup_steps <= 0:
+            return end
+
+        progress = min(step / warmup_steps, 1.0)
+
+        if schedule == "linear":
+            return start + (end - start) * progress
+        elif schedule == "cosine":
+            # Cosine annealing from start to end
+            return end - (end - start) * (1 + math.cos(math.pi * progress)) / 2
+        elif schedule == "step":
+            # Step function: jump to end after warmup
+            return end if progress >= 1.0 else start
+        else:
+            # Default to linear
+            return start + (end - start) * progress
+
+    def set_similarity_reward_func(self, func: Callable):
+        """Set the similarity reward function for mental simulation mode."""
+        self.similarity_reward_func = func
 
     def _get_default_lora_targets(self, model: PreTrainedModel) -> List[str]:
         """Get default LoRA target modules based on model architecture."""
@@ -730,6 +948,274 @@ class MAGRPOTrainer:
 
         return results
 
+    def _generate_single_agent(
+        self,
+        prompt: str,
+        num_return_sequences: int,
+        max_new_tokens: int,
+        do_sample: bool = True,
+        agent_idx: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Generate completions for a single agent with a given prompt.
+        Used for sequential generation in mental simulation mode.
+        """
+        # Get the appropriate model for this agent
+        model = self._get_agent_model(agent_idx)
+        if isinstance(model, DDP):
+            model = model.module
+
+        device = self.device
+
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer is required for generating completions")
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Tokenize prompt
+        prompt_encoding = self.tokenizer(
+            prompt, padding=True, truncation=True, return_tensors="pt"
+        ).to(device)
+
+        prompt_input_ids = prompt_encoding.input_ids
+        prompt_attention_mask = prompt_encoding.attention_mask
+
+        # Store original state
+        training_mode = model.training
+        original_requires_grad = {}
+        for name, param in model.named_parameters():
+            original_requires_grad[name] = param.requires_grad
+            param.requires_grad = False
+
+        model.eval()
+
+        try:
+            generation_kwargs = {
+                "input_ids": prompt_input_ids,
+                "attention_mask": prompt_attention_mask,
+                "max_new_tokens": max_new_tokens,
+                "output_scores": True,
+                "return_dict_in_generate": True,
+            }
+
+            top_k = getattr(self.args, "top_k", None)
+            repetition_penalty = getattr(self.args, "repetition_penalty", None)
+            if do_sample and num_return_sequences > 1:
+                generation_kwargs.update({
+                    "do_sample": True,
+                    "temperature": self.args.temperature,
+                    "top_p": self.args.top_p,
+                    "num_beams": 1,
+                    "num_return_sequences": num_return_sequences,
+                })
+                if top_k is not None:
+                    generation_kwargs["top_k"] = top_k
+                if repetition_penalty is not None:
+                    generation_kwargs["repetition_penalty"] = repetition_penalty
+            else:
+                generation_kwargs.update({
+                    "do_sample": do_sample,
+                    "num_beams": 1,
+                    "num_return_sequences": num_return_sequences,
+                })
+
+            if generation_kwargs.get("pad_token_id") is None:
+                generation_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
+
+            generation_output = model.generate(**generation_kwargs)
+
+        except Exception as e:
+            raise ValueError(f"Generation failed: {str(e)}")
+
+        # Restore model state
+        model.train(training_mode)
+        for name, param in model.named_parameters():
+            if name in original_requires_grad:
+                param.requires_grad = original_requires_grad[name]
+
+        # Parse output
+        all_sequences = generation_output.sequences
+        prompt_len = prompt_input_ids.shape[1]
+
+        completions = []
+        completion_tokens_list = []
+
+        for seq in all_sequences:
+            completion_tokens = seq[prompt_len:]
+            completion_tokens_list.append(completion_tokens)
+            completion_text = self.tokenizer.decode(completion_tokens, skip_special_tokens=True)
+            completions.append(completion_text)
+
+        completion_masks = [torch.ones(len(t), device=device) for t in completion_tokens_list]
+
+        return {
+            "prompts": [prompt],
+            "prompt_input_ids": prompt_input_ids,
+            "prompt_attention_mask": prompt_attention_mask,
+            "completions": [completions],
+            "completion_input_ids": [completion_tokens_list],
+            "completion_attention_mask": [completion_masks],
+        }
+
+    def _generate_with_mental_simulation(
+        self,
+        batch_item: Dict,
+        num_return_sequences: int,
+        max_new_tokens: int,
+        do_sample: bool = True,
+        inference_formatter: Optional[Callable] = None,
+        conditioned_formatter: Optional[Callable] = None,
+    ) -> Tuple[List[Dict[str, Any]], List[str], List[int]]:
+        """
+        Generate completions with mental simulation for Agent 2.
+
+        Flow:
+        1. Agent 1 generates helper function
+        2. Agent 2 Step A: Generate inference (mental simulation of Agent 1's code)
+        3. Agent 2 Step B: Generate main function conditioned on inference
+
+        Returns:
+            results: List of completion data per agent
+            agent2_inferences: List of inference texts (for similarity computation)
+            inference_boundaries: List of token indices where inference ends (for each generation)
+        """
+        device = self.device
+        results = []
+        agent2_inferences = []
+        inference_boundaries = []
+
+        # ====================================================================
+        # Step 1: Agent 1 generates helper function
+        # ====================================================================
+        agent1_prompt = self.formatters[0](batch_item)
+        agent1_result = self._generate_single_agent(
+            prompt=agent1_prompt,
+            num_return_sequences=num_return_sequences,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            agent_idx=0,
+        )
+        agent1_result["batch_items"] = [batch_item]
+        results.append(agent1_result)
+
+        # ====================================================================
+        # Step 2: Agent 2 Step A - Mental Simulation (generate inference)
+        # ====================================================================
+        if inference_formatter is not None:
+            inference_prompt = inference_formatter(batch_item)
+        else:
+            # Default inference prompt
+            inference_prompt = self._create_inference_prompt(batch_item)
+
+        inference_result = self._generate_single_agent(
+            prompt=inference_prompt,
+            num_return_sequences=num_return_sequences,
+            max_new_tokens=self.args.inference_max_tokens,
+            do_sample=do_sample,
+            agent_idx=1,  # Agent 2's adapter
+        )
+
+        # Store inference completions
+        inference_completions = inference_result["completions"][0]  # List of inference texts
+        agent2_inferences = inference_completions
+
+        # Track inference token lengths for each generation
+        inference_token_lengths = [len(t) for t in inference_result["completion_input_ids"][0]]
+
+        # ====================================================================
+        # Step 3: Agent 2 Step B - Generate main function conditioned on inference
+        # ====================================================================
+        agent2_combined_completions = []
+        agent2_combined_tokens = []
+        agent2_prompts = []
+
+        for gen_idx in range(num_return_sequences):
+            inference_text = inference_completions[gen_idx]
+
+            # Create conditioned prompt
+            if conditioned_formatter is not None:
+                conditioned_prompt = conditioned_formatter(batch_item, inference_text)
+            else:
+                conditioned_prompt = self._create_conditioned_prompt(batch_item, inference_text)
+
+            # Generate main function for this specific inference
+            # Note: For efficiency, we generate 1 main per inference
+            main_result = self._generate_single_agent(
+                prompt=conditioned_prompt,
+                num_return_sequences=1,  # 1 main per inference
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                agent_idx=1,  # Still Agent 2's adapter
+            )
+
+            main_completion = main_result["completions"][0][0]
+            main_tokens = main_result["completion_input_ids"][0][0]
+
+            # Combine inference + main for the full Agent 2 completion
+            full_completion = inference_text + "\n\n" + main_completion
+            agent2_combined_completions.append(full_completion)
+
+            # Store the main completion separately (this is what gets tested)
+            # For training, we track both inference and main tokens
+            inference_tokens = inference_result["completion_input_ids"][0][gen_idx]
+            combined_tokens = torch.cat([inference_tokens, main_tokens])
+            agent2_combined_tokens.append(combined_tokens)
+
+            # Track boundary where inference ends
+            inference_boundaries.append(len(inference_tokens))
+
+            agent2_prompts.append(conditioned_prompt)
+
+        # Build Agent 2 result structure
+        # For reward computation, we use just the main completion
+        agent2_result = {
+            "prompts": agent2_prompts,
+            "batch_items": [batch_item],
+            "prompt_input_ids": inference_result["prompt_input_ids"],
+            "prompt_attention_mask": inference_result["prompt_attention_mask"],
+            "completions": [agent2_combined_completions],
+            "completion_input_ids": [agent2_combined_tokens],
+            "completion_attention_mask": [[torch.ones(len(t), device=device) for t in agent2_combined_tokens]],
+            # Additional fields for mental simulation
+            "inference_completions": inference_completions,
+            "inference_token_ids": inference_result["completion_input_ids"][0],
+            "main_completions": [main_result["completions"][0][0] for _ in range(num_return_sequences)],
+            "inference_boundaries": inference_boundaries,
+        }
+        results.append(agent2_result)
+
+        return results, agent2_inferences, inference_boundaries
+
+    def _create_inference_prompt(self, batch_item: Dict) -> str:
+        """Create the default inference prompt for mental simulation."""
+        instruct_prompt = batch_item.get("instruct_prompt", "")
+        entry_point = batch_item.get("entry_point", "")
+
+        if not instruct_prompt:
+            instruct_prompt = batch_item.get("prompt", "")
+
+        return f"""Before writing the main function '{entry_point}', predict how your partner will implement the helper function 'aux'.
+
+Problem: {instruct_prompt}
+
+Write your prediction of how the 'aux' helper function will be implemented. Output ONLY the predicted function code starting with 'def aux(':
+
+"""
+
+    def _create_conditioned_prompt(self, batch_item: Dict, inference_text: str) -> str:
+        """Create the conditioned prompt for main function generation."""
+        # Get the original main formatter prompt
+        main_prompt = self.formatters[1](batch_item) if len(self.formatters) > 1 else ""
+
+        # Prepend the inference conditioning
+        conditioned_prompt = f"""Your partner will write the helper function like this:
+
+{inference_text}
+
+Considering this helper function implementation, {main_prompt}"""
+
+        return conditioned_prompt
+
     def _compute_single_reward(
         self,
         agent_completions: List[str],
@@ -983,10 +1469,14 @@ class MAGRPOTrainer:
         batch_item: Dict,
         **kwargs,
     ) -> tuple:
-        """Single training step with joint_mode support."""
+        """Single training step with joint_mode support and optional mental simulation."""
         num_gens = self.args.num_generations
 
-        # Batch generation for all agents
+        # Check if mental simulation is enabled
+        if self.args.enable_mental_simulation and self.num_agents >= 2:
+            return self._train_step_with_mental_simulation(batch_item, num_gens, **kwargs)
+
+        # Standard generation for all agents (original behavior)
         comps_per_agent = self._batch_generate_all_agents(
             batch_item,
             num_return_sequences=num_gens,
@@ -1031,6 +1521,137 @@ class MAGRPOTrainer:
             self._append_to_buffer(agent_idx, sample)
 
         return mean_return, rewards_vec, returns_vec
+
+    def _train_step_with_mental_simulation(
+        self,
+        batch_item: Dict,
+        num_gens: int,
+        **kwargs,
+    ) -> tuple:
+        """
+        Training step with mental simulation for Agent 2.
+        
+        Agent 2 first generates an inference about Agent 1's code,
+        then generates the main function conditioned on that inference.
+        Rewards are assigned differentially to inference vs main tokens.
+        """
+        # Generate with mental simulation
+        comps_per_agent, agent2_inferences, inference_boundaries = self._generate_with_mental_simulation(
+            batch_item,
+            num_return_sequences=num_gens,
+            max_new_tokens=self.args.max_new_tokens,
+            do_sample=True,
+        )
+
+        # For reward computation, we use Agent 1's actual code and Agent 2's main function
+        # Extract main completions for Agent 2 (excluding inference)
+        agent1_completions = comps_per_agent[0]["completions"][0]
+        
+        # For reward, we need the main function part of Agent 2's completion
+        # Get main completions from the mental simulation result
+        if "main_completions" in comps_per_agent[1]:
+            agent2_main_completions = comps_per_agent[1]["main_completions"]
+        else:
+            # Fallback: use full completion
+            agent2_main_completions = comps_per_agent[1]["completions"][0]
+
+        agent_completions_list = [agent1_completions, agent2_main_completions]
+
+        # Compute base code rewards (R_corr)
+        code_rewards_vec, combo_indices = self._compute_rewards_with_joint_mode(
+            batch_item, agent_completions_list
+        )
+
+        # Compute similarity rewards if similarity function is set
+        similarity_rewards = [0.0] * len(code_rewards_vec)
+        lambda_t = self._get_similarity_weight(self.env_step)
+        threshold = self.args.code_reward_threshold
+
+        if self.similarity_reward_func is not None:
+            for idx in range(len(code_rewards_vec)):
+                # Gate similarity reward based on code reward threshold
+                if code_rewards_vec[idx] >= threshold:
+                    # Compute similarity between inference and Agent 1's actual code
+                    inference_code = agent2_inferences[idx] if idx < len(agent2_inferences) else ""
+                    actual_code = agent1_completions[idx] if idx < len(agent1_completions) else ""
+                    
+                    try:
+                        sim_reward = self.similarity_reward_func(inference_code, actual_code)
+                        similarity_rewards[idx] = sim_reward
+                    except Exception:
+                        similarity_rewards[idx] = 0.0
+                else:
+                    # Gated: similarity reward is 0 if code reward below threshold
+                    similarity_rewards[idx] = 0.0
+
+        # Compute differential returns for Agent 2
+        # Inference tokens: R_corr + lambda_t * R_sim
+        # Main tokens: R_corr only
+        inference_returns = [
+            code_rewards_vec[i] + lambda_t * similarity_rewards[i]
+            for i in range(len(code_rewards_vec))
+        ]
+        main_returns = list(code_rewards_vec)
+
+        # Agent 1 gets standard returns (code reward)
+        agent1_returns = list(code_rewards_vec)
+
+        self.env_step += len(code_rewards_vec)
+        mean_reward = float(np.mean(code_rewards_vec)) if code_rewards_vec else 0.0
+        mean_return = float(np.mean(code_rewards_vec)) if code_rewards_vec else 0.0
+
+        # Create sample for Agent 1 (standard)
+        sample_agent1 = RolloutSample(
+            agent_idx=0,
+            completions_data=self._pack_completions_for_buffer(comps_per_agent[0]),
+            returns=agent1_returns,
+            combo_indices=combo_indices,
+            mean_reward=mean_reward,
+            mean_return=mean_return,
+            env_step=self.env_step,
+        )
+        self._append_to_buffer(0, sample_agent1)
+
+        # Create sample for Agent 2 (with differential rewards)
+        agent2_completions_data = self._pack_completions_for_buffer_with_boundaries(
+            comps_per_agent[1], inference_boundaries
+        )
+        sample_agent2 = RolloutSample(
+            agent_idx=1,
+            completions_data=agent2_completions_data,
+            returns=main_returns,  # Main function gets code reward
+            combo_indices=combo_indices,
+            mean_reward=mean_reward,
+            mean_return=mean_return,
+            env_step=self.env_step,
+            # Differential reward fields
+            inference_returns=inference_returns,
+            main_returns=main_returns,
+            inference_token_boundaries=inference_boundaries,
+        )
+        self._append_to_buffer(1, sample_agent2)
+
+        # Log mental simulation metrics
+        if self.wandb_initialized and wandb.run is not None and self.is_main_process:
+            ms_log = {
+                "train/lambda_t": lambda_t,
+                "train/similarity_reward_mean": float(np.mean(similarity_rewards)) if similarity_rewards else 0.0,
+                "train/inference_return_mean": float(np.mean(inference_returns)) if inference_returns else 0.0,
+            }
+            if self._should_log_train(self.env_step):
+                wandb.log(ms_log, step=self.env_step)
+
+        return mean_return, code_rewards_vec, list(code_rewards_vec)
+
+    def _pack_completions_for_buffer_with_boundaries(
+        self,
+        completions_data: Dict[str, Any],
+        inference_boundaries: List[int],
+    ) -> Dict[str, Any]:
+        """Pack completions data for buffer with token boundaries for mental simulation."""
+        base_packed = self._pack_completions_for_buffer(completions_data)
+        base_packed["inference_boundaries"] = inference_boundaries
+        return base_packed
 
     def _compute_per_agent_returns(
         self,
@@ -1112,23 +1733,47 @@ class MAGRPOTrainer:
             return
 
         random.shuffle(samples)
-        self.optimizer.zero_grad()
+
+        # Get the appropriate optimizer and model for this agent
+        agent_idx = samples[0].agent_idx if samples else 0
+        if self.agent_optimizers is not None and agent_idx < len(self.agent_optimizers):
+            optimizer = self.agent_optimizers[agent_idx]
+        else:
+            optimizer = self.optimizer
+
+        optimizer.zero_grad()
         scale = 1.0 / len(samples)
 
         for sample in samples:
-            loss = self._compute_loss_with_gradients(
-                sample.completions_data,
-                sample.returns,
-            )
+            # Check if this sample has differential rewards (mental simulation mode)
+            if (sample.inference_returns is not None and 
+                sample.main_returns is not None and
+                sample.inference_token_boundaries is not None):
+                # Use differential loss computation
+                loss = self._compute_loss_with_differential_rewards(
+                    sample.completions_data,
+                    sample.inference_returns,
+                    sample.main_returns,
+                    sample.inference_token_boundaries,
+                    agent_idx=agent_idx,
+                )
+            else:
+                # Standard loss computation
+                loss = self._compute_loss_with_gradients(
+                    sample.completions_data,
+                    sample.returns,
+                    agent_idx=agent_idx,
+                )
             (loss * scale).backward()
 
         # Gradient synchronization happens automatically with DDP
-        self.optimizer.step()
+        optimizer.step()
 
     def _compute_loss_with_gradients(
         self,
         completions_data: Dict[str, Any],
         returns: List[float],
+        agent_idx: int = 0,
     ) -> torch.Tensor:
         """Compute GRPO loss with proper gradient tracking."""
         device = self.device
@@ -1142,8 +1787,8 @@ class MAGRPOTrainer:
         mean_ret = returns_tensor.mean()
         advantages = returns_tensor - mean_ret
 
-        # Get model for forward pass
-        model = self.shared_model
+        # Get model for forward pass (use agent-specific model if available)
+        model = self._get_agent_model(agent_idx)
         if isinstance(model, DDP):
             model = model.module
 
@@ -1172,8 +1817,9 @@ class MAGRPOTrainer:
                 target_ids = completion_tokens
                 attention_mask = torch.ones(len(input_ids), device=device)
 
-                # Forward pass through the wrapped model (DDP handles gradient sync)
-                outputs = self.shared_model(
+                # Forward pass through the agent's model
+                agent_model = self._get_agent_model(agent_idx)
+                outputs = agent_model(
                     input_ids=input_ids.unsqueeze(0),
                     attention_mask=attention_mask.unsqueeze(0),
                 )
@@ -1192,6 +1838,146 @@ class MAGRPOTrainer:
                     loss = -sequence_log_prob * advantage
                     total_loss = total_loss + loss
                     num_samples += 1
+
+        if num_samples > 0:
+            total_loss = total_loss / num_samples
+
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            return torch.tensor(0.1, device=device, requires_grad=True)
+
+        return total_loss
+
+    def _compute_loss_with_differential_rewards(
+        self,
+        completions_data: Dict[str, Any],
+        inference_returns: List[float],
+        main_returns: List[float],
+        inference_boundaries: List[int],
+        normalize_std: bool = True,
+        agent_idx: int = 0,
+    ) -> torch.Tensor:
+        """
+        Compute GRPO loss with differential rewards for inference vs main tokens.
+        
+        This method applies different advantages to different parts of the completion:
+        - Tokens before inference_boundary: Use inference_returns (includes R_sim)
+        - Tokens after inference_boundary: Use main_returns (R_corr only)
+        
+        Advantage normalization is performed within each reward group:
+        - Inference advantages: normalized from inference_returns within the group
+        - Main advantages: normalized from main_returns within the group
+        
+        Args:
+            completions_data: Dictionary containing completion tokens and prompts.
+            inference_returns: Returns for inference tokens (R_corr + lambda*R_sim).
+            main_returns: Returns for main function tokens (R_corr only).
+            inference_boundaries: List of token indices where inference ends for each sample.
+            normalize_std: Whether to also divide by std for advantage normalization.
+            agent_idx: Index of the agent whose model to use.
+        
+        Returns:
+            Total loss tensor with gradients.
+        """
+        device = self.device
+
+        if len(inference_returns) == 0 or len(main_returns) == 0:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        # Convert to tensors
+        inference_returns_tensor = torch.tensor(inference_returns, dtype=torch.float, device=device)
+        main_returns_tensor = torch.tensor(main_returns, dtype=torch.float, device=device)
+
+        # Group-relative advantage normalization
+        # For inference tokens: advantage = (R_infer - mean(R_infer)) / std(R_infer)
+        # For main tokens: advantage = (R_main - mean(R_main)) / std(R_main)
+        
+        inference_mean = inference_returns_tensor.mean()
+        main_mean = main_returns_tensor.mean()
+
+        inference_advantages = inference_returns_tensor - inference_mean
+        main_advantages = main_returns_tensor - main_mean
+
+        # Optional: normalize by standard deviation for more stable gradients
+        if normalize_std:
+            inference_std = inference_returns_tensor.std()
+            main_std = main_returns_tensor.std()
+            
+            # Add small epsilon to avoid division by zero
+            eps = 1e-8
+            if inference_std > eps:
+                inference_advantages = inference_advantages / (inference_std + eps)
+            if main_std > eps:
+                main_advantages = main_advantages / (main_std + eps)
+
+        # Get model for forward pass (use agent-specific model if available)
+        model = self._get_agent_model(agent_idx)
+        if isinstance(model, DDP):
+            model = model.module
+
+        model.train()
+
+        prompt_input_ids = completions_data["prompt_input_ids"].to(device)
+        completion_input_ids = completions_data["completion_input_ids"]
+        if completion_input_ids and isinstance(completion_input_ids[0], list):
+            completion_input_ids = [[t.to(device) for t in completion_input_ids[0]]]
+        else:
+            completion_input_ids = [[t.to(device) for t in completion_input_ids]]
+
+        total_loss = torch.tensor(0.0, device=device, requires_grad=True)
+        num_samples = 0
+
+        prompt_ids = prompt_input_ids[0]
+
+        for seq_idx, completion_tokens in enumerate(completion_input_ids[0]):
+            if seq_idx >= len(inference_advantages) or seq_idx >= len(main_advantages):
+                break
+
+            # Get the boundary for this sample
+            boundary = inference_boundaries[seq_idx] if seq_idx < len(inference_boundaries) else 0
+
+            if len(completion_tokens) > 0:
+                input_ids = torch.cat([prompt_ids, completion_tokens[:-1]])
+                target_ids = completion_tokens
+                attention_mask = torch.ones(len(input_ids), device=device)
+
+                # Forward pass through the agent's model
+                agent_model = self._get_agent_model(agent_idx)
+                outputs = agent_model(
+                    input_ids=input_ids.unsqueeze(0),
+                    attention_mask=attention_mask.unsqueeze(0),
+                )
+
+                completion_logits = outputs.logits[0, prompt_ids.size(0) - 1 : -1, :]
+
+                # Compute log probs with differential advantages
+                inference_log_probs = []
+                main_log_probs = []
+
+                for i, token_id in enumerate(target_ids):
+                    if i < completion_logits.size(0):
+                        token_logits = completion_logits[i]
+                        token_log_prob = torch.log_softmax(token_logits, dim=-1)[token_id]
+
+                        if i < boundary:
+                            # This is an inference token
+                            inference_log_probs.append(token_log_prob)
+                        else:
+                            # This is a main function token
+                            main_log_probs.append(token_log_prob)
+
+                # Compute loss for inference tokens
+                if inference_log_probs:
+                    inference_log_prob_sum = torch.stack(inference_log_probs).sum()
+                    inference_loss = -inference_log_prob_sum * inference_advantages[seq_idx]
+                    total_loss = total_loss + inference_loss
+
+                # Compute loss for main tokens
+                if main_log_probs:
+                    main_log_prob_sum = torch.stack(main_log_probs).sum()
+                    main_loss = -main_log_prob_sum * main_advantages[seq_idx]
+                    total_loss = total_loss + main_loss
+
+                num_samples += 1
 
         if num_samples > 0:
             total_loss = total_loss / num_samples
