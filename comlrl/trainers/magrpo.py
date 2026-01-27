@@ -937,7 +937,7 @@ class MAGRPOTrainer:
 
             for batch_idx, batch in iterator:
                 # Periodic evaluation (all processes to avoid DDP sync issues)
-                if self.args.eval_interval > 0 and batch_idx % self.args.eval_interval == 0:
+                if self.args.eval_interval > 0 and batch_idx > 0 and batch_idx % self.args.eval_interval == 0:
                     # Synchronize before eval to ensure all processes are at the same point
                     if self.distributed:
                         dist.barrier()
