@@ -209,6 +209,8 @@ class HAGRPOTrainer:
         eval_aggregator: Optional[Callable] = None,
         # Training args
         args: Optional[HAGRPOConfig] = None,
+        # LoRA configuration
+        use_lora: bool = False,
     ):
         # Check for GPU availability
         if not torch.cuda.is_available():
@@ -306,15 +308,32 @@ class HAGRPOTrainer:
         self.eval_aggregator = eval_aggregator
         self.external_transition = external_transition
 
+        # Store LoRA configuration
+        self.use_lora = use_lora
+
         # Create optimizers for each agent
-        self.optimizers = [
-            torch.optim.AdamW(
-                agent.parameters(),
-                lr=self.args.learning_rate,
-                weight_decay=self.args.weight_decay,
-            )
-            for agent in self.agents
-        ]
+        # When using LoRA, only optimize adapter parameters (requires_grad=True)
+        if self.use_lora:
+            self.optimizers = []
+            for agent_idx, agent in enumerate(self.agents):
+                # Get only trainable parameters (LoRA adapter parameters)
+                trainable_params = [p for p in agent.parameters() if p.requires_grad]
+                optimizer = torch.optim.AdamW(
+                    trainable_params,
+                    lr=self.args.learning_rate,
+                    weight_decay=self.args.weight_decay,
+                )
+                self.optimizers.append(optimizer)
+        else:
+            # Full model training - optimize all parameters
+            self.optimizers = [
+                torch.optim.AdamW(
+                    agent.parameters(),
+                    lr=self.args.learning_rate,
+                    weight_decay=self.args.weight_decay,
+                )
+                for agent in self.agents
+            ]
 
         self.wandb_config = wandb_config
         self.wandb_initialized = False
@@ -431,6 +450,7 @@ class HAGRPOTrainer:
                 "per_device_train_batch_size": self.args.per_device_train_batch_size,
                 "num_generations": self.args.num_generations,
                 "max_new_tokens": self.args.max_new_tokens,
+                "use_lora": self.use_lora,
             }
 
             sections = (
@@ -1729,18 +1749,27 @@ class HAGRPOTrainer:
         buffer.clear()
 
     def save_model(self, output_dir):
-        """Save the final trained models."""
+        """Save the final trained models or LoRA adapters."""
         os.makedirs(output_dir, exist_ok=True)
 
         for agent_idx, agent in enumerate(self.agents):
-            agent_dir = f"{output_dir}/agent_{agent_idx}"
+            if self.use_lora:
+                # Save only LoRA adapter weights
+                agent_dir = f"{output_dir}/agent_{agent_idx}_lora"
+            else:
+                # Save full model
+                agent_dir = f"{output_dir}/agent_{agent_idx}"
+
             os.makedirs(agent_dir, exist_ok=True)
 
+            # For PEFT models, save_pretrained saves only the adapter weights
+            # For regular models, it saves the full model
             agent.save_pretrained(agent_dir)
 
             if self.tokenizer:
                 self.tokenizer.save_pretrained(agent_dir)
 
         if self.wandb_initialized and wandb.run is not None:
-            wandb.log({"final_model_saved": output_dir})
+            save_type = "lora_adapters" if self.use_lora else "full_models"
+            wandb.log({"final_model_saved": output_dir, "save_type": save_type})
             wandb.finish()
