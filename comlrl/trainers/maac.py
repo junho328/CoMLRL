@@ -109,6 +109,8 @@ class MAACTrainer:
         wandb_config: Optional[Dict[str, Any]] = None,
         metrics_callback: Optional[MetricsCallback] = None,
         external_transition: Optional[Callable] = None,
+        eval_logger: Optional[Callable] = None,
+        eval_aggregator: Optional[Callable] = None,
     ) -> None:
         if reward_func is None or not callable(reward_func):
             raise ValueError("A callable reward_func must be provided.")
@@ -118,6 +120,8 @@ class MAACTrainer:
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.metrics_callback = metrics_callback
+        self.eval_logger = eval_logger
+        self.eval_aggregator = eval_aggregator
         self.model_config = model_config or {}
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1016,13 +1020,41 @@ class MAACTrainer:
         turn_groups: Dict[int, List[RolloutSample]] = {}
         seen = 0
 
+        # For detailed logging: collect completions per agent per sample per turn
+        # Structure: all_agent_completions_turns[agent_idx][sample_idx][turn_idx]
+        all_agent_completions_turns: List[List[List[str]]] = [
+            [] for _ in range(self.args.num_agents)
+        ]
+        all_test_cases: List[str] = []
+        all_entry_points: List[str] = []
+        all_prompts: List[str] = []
+
         with torch.no_grad():
             for batch in dataloader:
                 for item in batch:
                     rollouts = self._collect_rollouts(item)
+
+                    # Group rollouts by turn for this sample
+                    sample_turns: Dict[int, Dict[int, str]] = {}  # turn_idx -> agent_idx -> completion
                     for sample in rollouts:
                         t_idx = int(sample.metadata.get("turn_idx", 0))
                         turn_groups.setdefault(t_idx, []).append(sample)
+                        sample_turns.setdefault(t_idx, {})[sample.agent_idx] = sample.completion
+
+                    # Organize completions for logger: per agent, per sample, per turn
+                    num_turns_in_sample = max(sample_turns.keys()) + 1 if sample_turns else 0
+                    for agent_idx in range(self.args.num_agents):
+                        agent_sample_turns = []
+                        for t_idx in range(num_turns_in_sample):
+                            completion = sample_turns.get(t_idx, {}).get(agent_idx, "")
+                            agent_sample_turns.append(completion)
+                        all_agent_completions_turns[agent_idx].append(agent_sample_turns)
+
+                    # Collect metadata for logger
+                    all_test_cases.append(item.get("test", ""))
+                    all_entry_points.append(item.get("entry_point", ""))
+                    all_prompts.append(item.get("prompt", ""))
+
                     seen += 1
                     if seen >= num_samples:
                         break
@@ -1030,10 +1062,35 @@ class MAACTrainer:
                     break
 
         eval_log: Dict[str, float] = {}
+
+        # Basic rollout metrics (reward_mean, etc.)
         for turn_idx, samples in sorted(turn_groups.items()):
             metrics = self._summarize_rollout_metrics(samples)
             for key, value in metrics.items():
                 eval_log[f"eval/turn_{turn_idx + 1}/{key}"] = value
+
+        # Detailed logging with eval_logger and eval_aggregator (fully_passed_rate, etc.)
+        if (
+            self.eval_logger is not None
+            and self.eval_aggregator is not None
+            and all_agent_completions_turns
+            and all(agent_comps for agent_comps in all_agent_completions_turns)
+        ):
+            try:
+                detailed_metrics = self.eval_logger(
+                    agent_completions_turns=all_agent_completions_turns,
+                    test_cases=all_test_cases,
+                    entry_points=all_entry_points,
+                    prompts=all_prompts,
+                )
+                aggregated_detailed_metrics = self.eval_aggregator(
+                    detailed_metrics, num_turns=self.args.num_turns
+                )
+                for key, value in aggregated_detailed_metrics.items():
+                    eval_log[f"eval/{key}"] = value
+            except Exception as e:
+                if getattr(self, "verbose", True):
+                    print(f"Warning: eval_logger/eval_aggregator failed: {e}")
 
         if eval_log:
             self._log_metrics(eval_log)

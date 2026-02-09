@@ -144,6 +144,15 @@ class HAGRPOConfig(TrainingArguments):
             "M factor accumulation from previous agents is still applied."
         },
     )
+    normalize_log_prob_by_length: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to normalize sequence log probabilities by sequence length. "
+            "If True, uses mean log prob instead of sum, making importance ratios "
+            "independent of sequence length. Recommended when agents generate "
+            "sequences of significantly different lengths (e.g., aux vs main functions)."
+        },
+    )
 
     # Evaluation
     eval_interval: int = field(
@@ -1214,7 +1223,11 @@ class HAGRPOTrainer:
                         log_probs.append(token_log_prob)
 
                 if log_probs:
-                    new_seq_log_prob = torch.stack(log_probs).sum()
+                    log_probs_tensor = torch.stack(log_probs)
+                    if self.args.normalize_log_prob_by_length:
+                        new_seq_log_prob = log_probs_tensor.mean()
+                    else:
+                        new_seq_log_prob = log_probs_tensor.sum()
                     # Store detached log prob for M factor computation
                     # (gradient should only flow through current agent's update)
                     new_log_probs.append(new_seq_log_prob.detach())
@@ -1423,7 +1436,11 @@ class HAGRPOTrainer:
                             log_probs.append(token_log_prob)
 
                     if log_probs:
-                        seq_log_prob = torch.stack(log_probs).sum()
+                        log_probs_tensor = torch.stack(log_probs)
+                        if self.args.normalize_log_prob_by_length:
+                            seq_log_prob = log_probs_tensor.mean()
+                        else:
+                            seq_log_prob = log_probs_tensor.sum()
                         sequence_log_probs.append(seq_log_prob.detach())
                     else:
                         sequence_log_probs.append(torch.tensor(0.0, device=device))

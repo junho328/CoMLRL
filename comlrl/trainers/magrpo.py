@@ -117,6 +117,41 @@ class MAGRPOConfig(TrainingArguments):
         metadata={"help": "Number of node samples to buffer before an update."},
     )
 
+    # Agent Chaining
+    agent_chaining: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable agent chaining mode where Agent 2 first reasons about Agent 1's output then generates main."
+        },
+    )
+    max_new_tokens_per_agent: Optional[List[int]] = field(
+        default=None,
+        metadata={
+            "help": "List of max_new_tokens for each agent. If None, uses max_new_tokens for all. "
+                    "Agent 2 typically needs more tokens to include both reasoning and main function."
+        },
+    )
+    format_reward_weight: float = field(
+        default=0.1,
+        metadata={
+            "help": "Weight for format reward (reasoning accuracy) in agent chaining mode."
+        },
+    )
+
+    # Chat Template (for Instruct models)
+    use_chat_template: bool = field(
+        default=False,
+        metadata={
+            "help": "Use chat template for Instruct models. Applies tokenizer.apply_chat_template() to prompts."
+        },
+    )
+    chat_template_system_prompt: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Optional system prompt to include in chat template. If None, no system prompt is added."
+        },
+    )
+
 
 @dataclass
 class NodeSample:
@@ -127,6 +162,7 @@ class NodeSample:
     node_mean_reward: float
     node_mean_return: float
     node_env_step: int
+    node_mean_format_reward: Optional[float] = None  # Agent Chaining format reward
 
 
 class MAGRPOTrainer:
@@ -333,6 +369,27 @@ class MAGRPOTrainer:
             except Exception:
                 self.dataset_type = None
 
+        # Agent Chaining setup
+        self.agent_chaining = getattr(self.args, "agent_chaining", False)
+        self.format_reward_func = None  # Will be set externally if needed
+        
+        # Setup per-agent max_new_tokens
+        max_tokens_per_agent = getattr(self.args, "max_new_tokens_per_agent", None)
+        if max_tokens_per_agent is not None:
+            if len(max_tokens_per_agent) != self.num_agents:
+                raise ValueError(
+                    f"max_new_tokens_per_agent length ({len(max_tokens_per_agent)}) "
+                    f"must match num_agents ({self.num_agents})"
+                )
+            self.max_new_tokens_per_agent = list(max_tokens_per_agent)
+        else:
+            # Use default max_new_tokens for all agents
+            self.max_new_tokens_per_agent = [self.args.max_new_tokens] * self.num_agents
+
+        # Chat template setup (for Instruct models)
+        self.use_chat_template = getattr(self.args, "use_chat_template", False)
+        self.chat_template_system_prompt = getattr(self.args, "chat_template_system_prompt", None)
+
         # Verbosity from config (default True)
         self.verbose = True
         try:
@@ -411,6 +468,177 @@ class MAGRPOTrainer:
             reward_processor if reward_processor is not None else (lambda x: x)
         )
 
+    def set_format_reward_func(self, func: Callable):
+        """Set the format reward function for agent chaining.
+        
+        This function evaluates how well Agent 2's reasoning matches Agent 1's actual output.
+        Signature: func(reasoning: str, actual_aux: str, batch_item: Dict) -> float
+        """
+        self.format_reward_func = func
+
+    def _get_max_tokens_for_agent(self, agent_idx: int) -> int:
+        """Get the max_new_tokens for a specific agent."""
+        if hasattr(self, "max_new_tokens_per_agent") and self.max_new_tokens_per_agent:
+            return self.max_new_tokens_per_agent[agent_idx]
+        return self.args.max_new_tokens
+
+    def _apply_chat_template(self, prompts: List[str]) -> List[str]:
+        """Apply chat template to prompts for Instruct models.
+        
+        Converts raw prompts into chat format expected by Instruct models.
+        Uses tokenizer.apply_chat_template() if available.
+        
+        Args:
+            prompts: List of raw prompt strings
+            
+        Returns:
+            List of prompts with chat template applied
+        """
+        if not self.use_chat_template:
+            return prompts
+        
+        templated_prompts = []
+        for prompt in prompts:
+            # Build messages list
+            messages = []
+            
+            # Add system prompt if configured
+            if self.chat_template_system_prompt:
+                messages.append({
+                    "role": "system",
+                    "content": self.chat_template_system_prompt
+                })
+            
+            # Add user message
+            messages.append({
+                "role": "user",
+                "content": prompt
+            })
+            
+            # Apply chat template using tokenizer
+            if hasattr(self.tokenizer, "apply_chat_template"):
+                try:
+                    templated = self.tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True  # Add assistant prompt start
+                    )
+                    templated_prompts.append(templated)
+                except Exception as e:
+                    # Fallback: return original prompt if template fails
+                    if self.verbose:
+                        print(f"Warning: Chat template application failed: {e}")
+                    templated_prompts.append(prompt)
+            else:
+                # Tokenizer doesn't support chat template
+                if self.verbose:
+                    print("Warning: Tokenizer does not support apply_chat_template")
+                templated_prompts.append(prompt)
+        
+        return templated_prompts
+
+    def _extract_assistant_response(self, completion_text: str) -> str:
+        """Extract the assistant's response from a completion that may contain chat template tokens.
+        
+        For Instruct models, the completion might include special tokens or formatting.
+        This method cleans up the response to extract just the content.
+        
+        Args:
+            completion_text: Raw completion text from the model
+            
+        Returns:
+            Cleaned assistant response
+        """
+        if not self.use_chat_template:
+            return completion_text
+        
+        # Common patterns to remove from assistant responses
+        # These vary by model family, so we handle common cases
+        response = completion_text
+        
+        # Remove common end-of-turn tokens
+        end_tokens = [
+            "<|im_end|>",  # Qwen, ChatML
+            "<|eot_id|>",  # Llama 3
+            "</s>",        # Various models
+            "<|end|>",     # Some models
+            "[/INST]",     # Llama 2
+            "### Response:", # Alpaca-style
+        ]
+        
+        for token in end_tokens:
+            if token in response:
+                response = response.split(token)[0]
+        
+        # Remove leading/trailing whitespace
+        response = response.strip()
+        
+        return response
+
+    def _extract_main_from_chaining_output(self, completion: str) -> str:
+        """Extract only the main function from Agent 2's chaining output.
+        
+        In agent chaining mode, Agent 2's output contains:
+        1. <predicted_aux>...</predicted_aux> block with predicted aux function
+        2. Main function implementation
+        
+        This extracts only the main function part for reward calculation.
+        
+        Args:
+            completion: Agent 2's full completion including predicted_aux block
+            
+        Returns:
+            Only the main function code (predicted_aux block removed)
+        """
+        import re
+        
+        if not completion:
+            return ""
+        
+        # Remove <predicted_aux>...</predicted_aux> block
+        cleaned = re.sub(
+            r'<predicted_aux>.*?</predicted_aux>',
+            '',
+            completion,
+            flags=re.DOTALL
+        )
+        
+        # Clean up extra whitespace
+        cleaned = cleaned.strip()
+        
+        return cleaned
+
+    def _compute_format_rewards(
+        self,
+        agent2_completions: List[str],
+        actual_aux_completions: List[str],
+        batch_items: List[Dict],
+    ) -> List[float]:
+        """Compute format rewards for Agent 2's reasoning accuracy.
+        
+        In agent chaining mode, Agent 2's completion includes both:
+        1. Reasoning about Agent 1's expected aux function
+        2. The main function implementation
+        
+        This evaluates how well the reasoning part predicted Agent 1's actual aux output.
+        The format_reward_func should parse the reasoning from agent2's completion.
+        """
+        if self.format_reward_func is None:
+            # Default: return 0 if no format reward function is set
+            return [0.0] * len(agent2_completions)
+
+        format_rewards = []
+        for agent2_comp, actual_aux, batch_item in zip(
+            agent2_completions, actual_aux_completions, batch_items
+        ):
+            try:
+                reward = self.format_reward_func(agent2_comp, actual_aux, batch_item)
+                format_rewards.append(float(reward))
+            except Exception:
+                format_rewards.append(0.0)
+        
+        return format_rewards
+
     def _init_wandb(self):
         """Initialize Weights & Biases for tracking with multi-turn config."""
         if not self.wandb_initialized:
@@ -440,6 +668,13 @@ class MAGRPOTrainer:
                 "num_generations": self.args.num_generations,
                 "max_new_tokens": self.args.max_new_tokens,
                 "use_lora": self.use_lora,
+                # Agent Chaining settings
+                "agent_chaining": getattr(self.args, "agent_chaining", False),
+                "max_new_tokens_per_agent": getattr(self, "max_new_tokens_per_agent", None),
+                "format_reward_weight": getattr(self.args, "format_reward_weight", 0.1),
+                # Chat Template settings
+                "use_chat_template": getattr(self, "use_chat_template", False),
+                "chat_template_system_prompt": getattr(self, "chat_template_system_prompt", None),
             }
 
             # No per-turn weighting or early termination config
@@ -880,23 +1115,44 @@ class MAGRPOTrainer:
             response_history_per_agent: Optional[List[List[str]]] = None,
         ):
             comps_per_agent = []
+            chaining_reasoning_completions = None  # Store Agent 2's reasoning
+            
+            # Generate completions for all agents
+            # In Agent Chaining mode, Agent 2's formatter already includes instruction
+            # to reason about Agent 1's aux first, then generate main function
             for agent_idx in range(self.num_agents):
                 comps = self._generate_completions_with_external_prompts(
                     self.agents[agent_idx],
                     [batch_item],
                     agent_idx=agent_idx,
                     num_return_sequences=num_gens,
-                    max_new_tokens=self.args.max_new_tokens,
+                    max_new_tokens=None,  # Will use agent-specific max_new_tokens
                     external_prompts=(
                         prompts_per_agent[agent_idx] if prompts_per_agent else None
                     ),
                     **kwargs,
                 )
                 comps_per_agent.append(comps)
+            
+            # In Agent Chaining mode, extract reasoning from Agent 2's completions
+            # Agent 2's output contains both reasoning about aux and main function
+            agent2_raw_completions = None  # Store Agent 2's raw completions (with predicted_aux)
+            if self.agent_chaining and self.num_agents >= 2:
+                agent2_raw_completions = comps_per_agent[self.num_agents - 1]["completions"][0]
+                chaining_reasoning_completions = agent2_raw_completions  # For format reward calculation
 
-            agent_completions_list = [
-                comps_per_agent[i]["completions"][0] for i in range(self.num_agents)
-            ]
+            # Build agent_completions_list
+            # In Agent Chaining mode, extract only main function from Agent 2's output
+            agent_completions_list = []
+            for i in range(self.num_agents):
+                completions = comps_per_agent[i]["completions"][0]
+                if self.agent_chaining and i == self.num_agents - 1:
+                    # Agent 2: extract main function only (remove <predicted_aux> block)
+                    completions = [
+                        self._extract_main_from_chaining_output(comp)
+                        for comp in completions
+                    ]
+                agent_completions_list.append(completions)
             # Prompts actually used this turn, per agent (may differ across agents)
             prompts_used_this_turn = [
                 comps_per_agent[i]["prompts"][0] for i in range(self.num_agents)
@@ -969,6 +1225,45 @@ class MAGRPOTrainer:
             else:
                 raise ValueError(f"Unsupported joint_mode: {joint_mode}")
 
+            # Agent Chaining: Compute format rewards for Agent 2 (applied only to Agent 2's returns later)
+            format_rewards_vec = None
+            if (
+                self.agent_chaining
+                and chaining_reasoning_completions is not None
+                and self.format_reward_func is not None
+                and self.num_agents >= 2
+            ):
+                # Compute format rewards for each completion pair
+                format_rewards_vec = []
+                
+                # For aligned mode: compute format reward for each aligned pair
+                agent1_completions = agent_completions_list[0]  # Agent 1's aux completions
+                
+                for j in range(len(rewards_vec)):
+                    if joint_mode in ["align", "aligned"]:
+                        # Aligned: reasoning[j] should predict aux[j]
+                        reasoning_idx = j if j < len(chaining_reasoning_completions) else 0
+                        aux_idx = j if j < len(agent1_completions) else 0
+                    else:
+                        # Cross mode: use combo_indices to get the right aux completion
+                        idx_tuple = combo_indices[j]
+                        reasoning_idx = idx_tuple[self.num_agents - 1] if len(idx_tuple) > 1 else 0
+                        aux_idx = idx_tuple[0]
+                    
+                    reasoning = chaining_reasoning_completions[reasoning_idx] if reasoning_idx < len(chaining_reasoning_completions) else ""
+                    actual_aux = agent1_completions[aux_idx] if aux_idx < len(agent1_completions) else ""
+                    
+                    try:
+                        format_reward = self.format_reward_func(
+                            reasoning, actual_aux, batch_item
+                        )
+                        format_rewards_vec.append(float(format_reward))
+                    except Exception:
+                        format_rewards_vec.append(0.0)
+                
+                # NOTE: format_rewards_vec is NOT added to rewards_vec here
+                # It will be applied only to Agent 2's returns in post_order_update
+
             if 0 <= turn_idx < len(epoch_turn_rewards):
                 epoch_turn_rewards[turn_idx].append(
                     np.mean(rewards_vec) if rewards_vec else 0.0
@@ -999,6 +1294,8 @@ class MAGRPOTrainer:
                 "returns": None,
                 "combo_indices": combo_indices,
                 "env_step": node_env_step,
+                "format_rewards": format_rewards_vec,  # Agent Chaining format rewards
+                "chaining_reasoning": chaining_reasoning_completions,  # Agent 2's reasoning
             }
 
             if turn_idx < num_turns - 1 and not terminate_here:
@@ -1109,20 +1406,43 @@ class MAGRPOTrainer:
                     list(map(float, returns_vec)) for _ in range(self.num_agents)
                 ]
             node_env_step = int(node.get("env_step", self.env_step))
+            # Get format rewards if available (Agent Chaining mode)
+            format_rewards = node.get("format_rewards") or []
+            node_mean_format_reward = (
+                float(np.mean(format_rewards)) if format_rewards else None
+            )
+            format_reward_weight = getattr(self.args, "format_reward_weight", 0.1)
+            
             for agent_idx in range(self.num_agents):
                 node_rewards = node.get("rewards") or []
                 node_mean_reward = float(np.mean(node_rewards)) if node_rewards else 0.0
                 node_mean_return = float(np.mean(returns_vec)) if returns_vec else 0.0
+                
+                # Compute returns for this agent
+                agent_returns = [float(r) for r in per_agent_joint_sums[agent_idx]]
+                
+                # Agent Chaining: Add format reward ONLY to Agent 2's returns
+                if (
+                    self.agent_chaining
+                    and agent_idx == self.num_agents - 1  # Agent 2 (last agent)
+                    and format_rewards
+                ):
+                    # Add weighted format reward to Agent 2's returns
+                    for j in range(len(agent_returns)):
+                        if j < len(format_rewards):
+                            agent_returns[j] += format_reward_weight * format_rewards[j]
+                
                 sample = NodeSample(
                     agent_idx=agent_idx,
                     turn_idx=int(node.get("turn", 0)),
                     completions_data=self._pack_completions_for_buffer(
                         comps_per_agent[agent_idx]
                     ),
-                    returns=[float(r) for r in per_agent_joint_sums[agent_idx]],
+                    returns=agent_returns,
                     node_mean_reward=node_mean_reward,
                     node_mean_return=node_mean_return,
                     node_env_step=node_env_step,
+                    node_mean_format_reward=node_mean_format_reward if agent_idx == self.num_agents - 1 else None,
                 )
                 pending_samples[agent_idx].append(sample)
 
@@ -1187,12 +1507,19 @@ class MAGRPOTrainer:
             format_func = self.formatters[agent_idx]
             prompts = [format_func(item) for item in batch_items]
         # batch_size is always 1 due to enforced constraint
+        
+        # Store original prompts for reference (before chat template)
+        original_prompts = list(prompts)
 
         # Ensure tokenizer exists
         if self.tokenizer is None:
             raise ValueError("Tokenizer is required for generating completions")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Apply chat template if enabled (for Instruct models)
+        if self.use_chat_template:
+            prompts = self._apply_chat_template(prompts)
 
         # Tokenize prompts
         prompt_encodings = self.tokenizer(
@@ -1312,6 +1639,11 @@ class MAGRPOTrainer:
             completion_text = self.tokenizer.decode(
                 completion_tokens, skip_special_tokens=True
             )
+            
+            # Extract assistant response if using chat template
+            if self.use_chat_template:
+                completion_text = self._extract_assistant_response(completion_text)
+            
             batch_completions.append(completion_text)
 
         completions.append(batch_completions)
@@ -1347,7 +1679,7 @@ class MAGRPOTrainer:
         batch_items,
         agent_idx=0,
         num_return_sequences=1,
-        max_new_tokens=128,
+        max_new_tokens=None,
         external_prompts=None,
         do_sample: Optional[bool] = None,
         **kwargs,
@@ -1357,7 +1689,13 @@ class MAGRPOTrainer:
         This wraps the _generate_completions method to handle external transitions.
 
         When num_turns=1 or external_prompts is None, behaves like _generate_completions.
+        
+        If max_new_tokens is None, uses the agent-specific max_new_tokens from config.
         """
+        # Use agent-specific max_new_tokens if not explicitly provided
+        if max_new_tokens is None:
+            max_new_tokens = self._get_max_tokens_for_agent(agent_idx)
+        
         # If single-turn or no external prompts, use standard method directly
         if self.args.num_turns == 1 or external_prompts is None:
             return self._generate_completions(
@@ -1525,6 +1863,15 @@ class MAGRPOTrainer:
                 batch_log[prefix + "expected_return"] = float(
                     np.mean([s.node_mean_return for s in samples])
                 )
+                
+                # Log format reward if available (Agent Chaining mode)
+                format_rewards = [
+                    s.node_mean_format_reward for s in samples
+                    if s.node_mean_format_reward is not None
+                ]
+                if format_rewards:
+                    batch_log[prefix + "format_reward_mean"] = float(np.mean(format_rewards))
+                
                 step = max(s.node_env_step for s in samples)
                 if self._should_log_train(step):
                     wandb.log(batch_log, step=step)
